@@ -1,0 +1,55 @@
+name: Lugia Tracker - Automated Search
+
+on:
+  # Run every 6 hours
+  schedule:
+    - cron: '0 */6 * * *'  # At minute 0 past every 6th hour
+
+  # Allow manual triggering
+  workflow_dispatch:
+
+jobs:
+  track-lugia:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Lugia tracker
+        env:
+          EBAY_APP_ID: ${{ secrets.EBAY_APP_ID }}
+          EBAY_CERT_ID: ${{ secrets.EBAY_CERT_ID }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python lugia_tracker.py
+
+      - name: Calculate daily statistics
+        if: success()
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          python -c "
+          from database import DatabaseManager
+          import os
+
+          db = DatabaseManager(os.getenv('DATABASE_URL'))
+          db.calculate_daily_grade_stats()
+          db.close()
+          "
+
+      - name: Review listings
+        if: success()
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python market_information.py

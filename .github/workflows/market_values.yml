@@ -1,0 +1,34 @@
+name: Market Value Tracker - Daily Update
+
+on:
+  # Run once per day at midnight UTC
+  schedule:
+    - cron: '0 0 * * *'  # Daily at midnight
+
+  # Allow manual triggering
+  workflow_dispatch:
+
+jobs:
+  track-market-values:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Track market values
+        env:
+          PRICECHARTING_API_KEY: ${{ secrets.PRICECHARTING_API_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python market_value_tracker.py
