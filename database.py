@@ -50,6 +50,9 @@ class DatabaseManager:
             shipping REAL,
             total_cost REAL,
             condition TEXT,
+            is_graded BOOLEAN,
+            raw_condition TEXT,
+            comparable_grade TEXT,
             listing_type TEXT,
             is_auction BOOLEAN,
             seller_username TEXT,
@@ -179,16 +182,11 @@ class DatabaseManager:
             data_source TEXT DEFAULT 'pricecharting'
         );
 
-        -- Add tracked_card_id to listings table if it doesn't exist
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns
-                WHERE table_name='listings' AND column_name='tracked_card_id'
-            ) THEN
-                ALTER TABLE listings ADD COLUMN tracked_card_id INTEGER REFERENCES tracked_cards(id) ON DELETE SET NULL;
-            END IF;
-        END $$;
+        -- Add columns to listings table if they don't exist
+        ALTER TABLE listings ADD COLUMN IF NOT EXISTS tracked_card_id INTEGER REFERENCES tracked_cards(id) ON DELETE SET NULL;
+        ALTER TABLE listings ADD COLUMN IF NOT EXISTS is_graded BOOLEAN;
+        ALTER TABLE listings ADD COLUMN IF NOT EXISTS raw_condition TEXT;
+        ALTER TABLE listings ADD COLUMN IF NOT EXISTS comparable_grade TEXT;
 
         -- Discovery runs table (track each discovery execution)
         CREATE TABLE IF NOT EXISTS discovery_runs (
