@@ -160,6 +160,29 @@ class DatabaseManager:
         ALTER TABLE listings ADD COLUMN IF NOT EXISTS raw_condition TEXT;
         ALTER TABLE listings ADD COLUMN IF NOT EXISTS comparable_grade TEXT;
 
+        -- Discovered listings table (individual listings from broad discovery search)
+        CREATE TABLE IF NOT EXISTS discovered_listings (
+            id SERIAL PRIMARY KEY,
+            item_id TEXT UNIQUE NOT NULL,
+            title TEXT,
+            card_name TEXT,
+            set_name TEXT,
+            card_number TEXT,
+            variant_attributes JSONB,
+            grade TEXT,
+            grading_company TEXT,
+            price REAL NOT NULL,
+            condition TEXT,
+            seller_username TEXT,
+            seller_feedback REAL,
+            url TEXT,
+            image_url TEXT,
+            listing_type TEXT,
+            is_auction BOOLEAN DEFAULT FALSE,
+            discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            is_active BOOLEAN DEFAULT TRUE
+        );
 
         -- Create indexes for better query performance
         CREATE INDEX IF NOT EXISTS idx_listings_item_id ON listings(item_id);
@@ -173,6 +196,9 @@ class DatabaseManager:
         CREATE INDEX IF NOT EXISTS idx_market_values_recorded_at ON market_values(recorded_at);
         CREATE INDEX IF NOT EXISTS idx_tracked_cards_is_active ON tracked_cards(is_active);
         CREATE INDEX IF NOT EXISTS idx_card_market_values_tracked_card ON card_market_values(tracked_card_id);
+        CREATE INDEX IF NOT EXISTS idx_discovered_listings_item_id ON discovered_listings(item_id);
+        CREATE INDEX IF NOT EXISTS idx_discovered_listings_card ON discovered_listings(card_name, set_name);
+        CREATE INDEX IF NOT EXISTS idx_discovered_listings_price ON discovered_listings(price);
         """
 
         try:
@@ -395,6 +421,80 @@ class DatabaseManager:
         except Exception as e:
             print(f"Error fetching search runs: {e}")
             return []
+
+    def save_discovered_listing(self, listing: Dict) -> bool:
+        """
+        Save an individual discovered listing to the database.
+
+        Args:
+            listing: Dictionary containing listing data
+
+        Returns:
+            True if successful, False otherwise
+        """
+        import json
+
+        insert_sql = """
+        INSERT INTO discovered_listings (
+            item_id, title, card_name, set_name, card_number,
+            variant_attributes, grade, grading_company, price, condition,
+            seller_username, seller_feedback, url, image_url, listing_type, is_auction
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (item_id) DO UPDATE SET
+            title = EXCLUDED.title,
+            price = EXCLUDED.price,
+            condition = EXCLUDED.condition,
+            seller_feedback = EXCLUDED.seller_feedback,
+            last_seen = CURRENT_TIMESTAMP,
+            is_active = TRUE
+        RETURNING id;
+        """
+
+        try:
+            variant_attrs = listing.get('variant_attributes', {})
+            variant_json = json.dumps(variant_attrs) if variant_attrs else None
+
+            with self.conn.cursor() as cursor:
+                cursor.execute(insert_sql, (
+                    listing.get('item_id'),
+                    listing.get('title'),
+                    listing.get('card_name'),
+                    listing.get('set_name'),
+                    listing.get('card_number'),
+                    variant_json,
+                    listing.get('grade'),
+                    listing.get('grading_company'),
+                    listing.get('price'),
+                    listing.get('condition'),
+                    listing.get('seller_username'),
+                    listing.get('seller_feedback'),
+                    listing.get('url'),
+                    listing.get('image_url'),
+                    listing.get('listing_type'),
+                    listing.get('is_auction', False)
+                ))
+                self.conn.commit()
+                return True
+        except Exception as e:
+            print(f"Error saving discovered listing {listing.get('item_id')}: {e}")
+            self.conn.rollback()
+            return False
+
+    def save_discovered_listings_batch(self, listings: list) -> int:
+        """
+        Save multiple discovered listings in a batch.
+
+        Args:
+            listings: List of listing dictionaries
+
+        Returns:
+            Number of listings saved successfully
+        """
+        saved = 0
+        for listing in listings:
+            if self.save_discovered_listing(listing):
+                saved += 1
+        return saved
 
     def close(self):
         """Close database connection."""
