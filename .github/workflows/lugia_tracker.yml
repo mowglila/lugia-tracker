@@ -34,20 +34,6 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: python lugia_tracker.py
 
-      - name: Calculate daily statistics
-        if: success()
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: |
-          python -c "
-          from database import DatabaseManager
-          import os
-
-          db = DatabaseManager(os.getenv('DATABASE_URL'))
-          db.calculate_daily_grade_stats()
-          db.close()
-          "
-
       - name: Review listings
         if: success()
         env:

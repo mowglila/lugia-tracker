@@ -86,19 +86,6 @@ class DatabaseManager:
             error_message TEXT
         );
 
-        -- Grade statistics table (aggregated stats by grade per day)
-        CREATE TABLE IF NOT EXISTS grade_stats (
-            id SERIAL PRIMARY KEY,
-            grade TEXT NOT NULL,
-            date DATE NOT NULL,
-            count INTEGER,
-            min_price REAL,
-            avg_price REAL,
-            median_price REAL,
-            max_price REAL,
-            UNIQUE(grade, date)
-        );
-
         -- Market values table (PriceCharting market values over time)
         CREATE TABLE IF NOT EXISTS market_values (
             id SERIAL PRIMARY KEY,
@@ -274,7 +261,6 @@ class DatabaseManager:
         CREATE INDEX IF NOT EXISTS idx_price_history_item_id ON price_history(item_id);
         CREATE INDEX IF NOT EXISTS idx_price_history_recorded_at ON price_history(recorded_at);
         CREATE INDEX IF NOT EXISTS idx_search_runs_run_time ON search_runs(run_time);
-        CREATE INDEX IF NOT EXISTS idx_grade_stats_date ON grade_stats(date);
         CREATE INDEX IF NOT EXISTS idx_market_values_product_id ON market_values(product_id);
         CREATE INDEX IF NOT EXISTS idx_market_values_recorded_at ON market_values(recorded_at);
         CREATE INDEX IF NOT EXISTS idx_tracked_cards_is_active ON tracked_cards(is_active);
@@ -486,70 +472,6 @@ class DatabaseManager:
                 return [dict(row) for row in cursor.fetchall()]
         except Exception as e:
             print(f"Error fetching price history: {e}")
-            return []
-
-    def calculate_daily_grade_stats(self, target_date: date = None):
-        """
-        Calculate and store daily statistics by grade.
-
-        Args:
-            target_date: Date to calculate stats for (default: today)
-        """
-        if not target_date:
-            target_date = date.today()
-
-        stats_sql = """
-        INSERT INTO grade_stats (grade, date, count, min_price, avg_price, median_price, max_price)
-        SELECT
-            grade,
-            %s as date,
-            COUNT(*) as count,
-            MIN(total_cost) as min_price,
-            AVG(total_cost) as avg_price,
-            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY total_cost) as median_price,
-            MAX(total_cost) as max_price
-        FROM listings
-        WHERE is_active = TRUE
-        GROUP BY grade
-        ON CONFLICT (grade, date) DO UPDATE SET
-            count = EXCLUDED.count,
-            min_price = EXCLUDED.min_price,
-            avg_price = EXCLUDED.avg_price,
-            median_price = EXCLUDED.median_price,
-            max_price = EXCLUDED.max_price;
-        """
-
-        try:
-            with self.conn.cursor() as cursor:
-                cursor.execute(stats_sql, (target_date,))
-                self.conn.commit()
-                print(f"Updated grade statistics for {target_date}")
-        except Exception as e:
-            print(f"Error calculating grade stats: {e}")
-            self.conn.rollback()
-
-    def get_grade_stats(self, days: int = 30) -> List[Dict]:
-        """
-        Get grade statistics for the last N days.
-
-        Args:
-            days: Number of days to retrieve
-
-        Returns:
-            List of grade statistics
-        """
-        query = """
-        SELECT * FROM grade_stats
-        WHERE date >= CURRENT_DATE - INTERVAL '%s days'
-        ORDER BY date DESC, grade;
-        """
-
-        try:
-            with self.conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                cursor.execute(query, (days,))
-                return [dict(row) for row in cursor.fetchall()]
-        except Exception as e:
-            print(f"Error fetching grade stats: {e}")
             return []
 
     def get_recent_search_runs(self, limit: int = 10) -> List[Dict]:

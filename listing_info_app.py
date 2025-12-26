@@ -1,21 +1,23 @@
 """
 Listing Info App - Streamlit Web Interface
 
+Displays eBay listing information alongside PriceCharting market values.
+Facts only - no recommendations, no deal scores.
+
 Run with: streamlit run listing_info_app.py
 """
 
 import os
 import streamlit as st
 import pandas as pd
-from datetime import datetime
 from database import DatabaseManager
 from grade_matcher import GradeMatcher
 
 
 # Page config
 st.set_page_config(
-    page_title="Lugia Listing Info",
-    page_icon="🎴",
+    page_title="Listing Info",
+    page_icon="",
     layout="wide"
 )
 
@@ -33,43 +35,8 @@ CONDITION_TO_PSA_RANGE = {
 }
 
 
-# Qualitative feedback options
-RATING_REASONS_POSITIVE = [
-    "Great price / Good value",
-    "Trusted seller / High feedback",
-    "Excellent card centering",
-    "Low population count (rare)",
-    "Clear, detailed photos",
-    "Good return policy",
-    "Fast/free shipping",
-    "Below market average"
-]
-
-RATING_REASONS_NEGATIVE = [
-    "Price too high",
-    "Seller feedback too low",
-    "Poor quality photos",
-    "Visible damage/wear",
-    "Centering looks off",
-    "Possibly overgraded",
-    "Shipping costs too high",
-    "Suspicious listing",
-    "Item out of scope (wrong card/not Lugia 1st Ed)"
-]
-
-PRIORITY_FACTORS = [
-    "Lowest price",
-    "Seller reputation",
-    "Card condition/centering",
-    "Grading company preference",
-    "Fast/free shipping",
-    "Return policy"
-]
-
-
 def get_db_connection():
-    """Get database connection (no cache - always fresh data)."""
-    # Try Streamlit secrets first (for cloud deployment), then fall back to env var (for local)
+    """Get database connection."""
     try:
         db_url = st.secrets["DATABASE_URL"]
     except (KeyError, FileNotFoundError):
@@ -84,9 +51,6 @@ def get_db_connection():
     except Exception as e:
         st.error("Failed to connect to database!")
         st.error(f"Error: {str(e)}")
-        if "password authentication failed" in str(e):
-            st.error("Password authentication failed. Please check your DATABASE_URL password in Streamlit secrets.")
-            st.info("Get the correct connection string from Supabase: Settings -> Database -> Connection string -> URI (Transaction pooler)")
         st.stop()
 
 
@@ -123,10 +87,26 @@ def get_grade_matcher():
     return None
 
 
-def load_unreviewed_listings():
-    """Load listings that haven't been reviewed yet using PriceCharting market values."""
+def get_hidden_listings():
+    """Get set of hidden listing item_ids from session state."""
+    if 'hidden_listings' not in st.session_state:
+        st.session_state.hidden_listings = set()
+    return st.session_state.hidden_listings
+
+
+def hide_listing(item_id):
+    """Add a listing to the hidden set."""
+    if 'hidden_listings' not in st.session_state:
+        st.session_state.hidden_listings = set()
+    st.session_state.hidden_listings.add(item_id)
+
+
+def load_active_listings():
+    """Load all active listings with market values, sorted by price difference."""
     db = get_db_connection()
 
+    # Sort by (total_cost - market_value) ascending
+    # Listings priced below market value will appear first
     query = """
     WITH latest_market_values AS (
         SELECT
@@ -165,17 +145,17 @@ def load_unreviewed_listings():
             WHEN 'PSA 8' THEN mv.psa_8_price
             WHEN 'PSA 7' THEN mv.psa_7_price
             WHEN 'BGS 10' THEN mv.bgs_10_price
-            WHEN 'BGS 9.5' THEN mv.cgc_9_5_price  -- Use 9.5 generic as proxy
-            WHEN 'BGS 9' THEN mv.psa_9_price      -- Use PSA 9 as proxy
-            WHEN 'CGC 10' THEN mv.bgs_10_price    -- Use BGS 10 as proxy
+            WHEN 'BGS 9.5' THEN mv.cgc_9_5_price
+            WHEN 'BGS 9' THEN mv.psa_9_price
+            WHEN 'CGC 10' THEN mv.bgs_10_price
             WHEN 'CGC 9.5' THEN mv.cgc_9_5_price
-            WHEN 'CGC 9' THEN mv.psa_9_price      -- Use PSA 9 as proxy
+            WHEN 'CGC 9' THEN mv.psa_9_price
             WHEN 'Raw' THEN mv.raw_ungraded_price
             WHEN 'Ungraded' THEN mv.raw_ungraded_price
             WHEN 'Unknown' THEN mv.raw_ungraded_price
             ELSE NULL
-        END as avg_price,
-        CASE l.grade
+        END as market_value,
+        l.total_cost - COALESCE(CASE l.grade
             WHEN 'PSA 10' THEN mv.psa_10_price
             WHEN 'PSA 9' THEN mv.psa_9_price
             WHEN 'PSA 8' THEN mv.psa_8_price
@@ -190,64 +170,12 @@ def load_unreviewed_listings():
             WHEN 'Ungraded' THEN mv.raw_ungraded_price
             WHEN 'Unknown' THEN mv.raw_ungraded_price
             ELSE NULL
-        END as median_price,
-        CASE
-            WHEN CASE l.grade
-                WHEN 'PSA 10' THEN mv.psa_10_price
-                WHEN 'PSA 9' THEN mv.psa_9_price
-                WHEN 'PSA 8' THEN mv.psa_8_price
-                WHEN 'PSA 7' THEN mv.psa_7_price
-                WHEN 'BGS 10' THEN mv.bgs_10_price
-                WHEN 'BGS 9.5' THEN mv.cgc_9_5_price
-                WHEN 'BGS 9' THEN mv.psa_9_price
-                WHEN 'CGC 10' THEN mv.bgs_10_price
-                WHEN 'CGC 9.5' THEN mv.cgc_9_5_price
-                WHEN 'CGC 9' THEN mv.psa_9_price
-                WHEN 'Raw' THEN mv.raw_ungraded_price
-                WHEN 'Ungraded' THEN mv.raw_ungraded_price
-                WHEN 'Unknown' THEN mv.raw_ungraded_price
-                ELSE NULL
-            END > 0 THEN
-                ROUND(((l.total_cost - CASE l.grade
-                    WHEN 'PSA 10' THEN mv.psa_10_price
-                    WHEN 'PSA 9' THEN mv.psa_9_price
-                    WHEN 'PSA 8' THEN mv.psa_8_price
-                    WHEN 'PSA 7' THEN mv.psa_7_price
-                    WHEN 'BGS 10' THEN mv.bgs_10_price
-                    WHEN 'BGS 9.5' THEN mv.cgc_9_5_price
-                    WHEN 'BGS 9' THEN mv.psa_9_price
-                    WHEN 'CGC 10' THEN mv.bgs_10_price
-                    WHEN 'CGC 9.5' THEN mv.cgc_9_5_price
-                    WHEN 'CGC 9' THEN mv.psa_9_price
-                    WHEN 'Raw' THEN mv.raw_ungraded_price
-                    WHEN 'Ungraded' THEN mv.raw_ungraded_price
-                    WHEN 'Unknown' THEN mv.raw_ungraded_price
-                    ELSE NULL
-                END) / CASE l.grade
-                    WHEN 'PSA 10' THEN mv.psa_10_price
-                    WHEN 'PSA 9' THEN mv.psa_9_price
-                    WHEN 'PSA 8' THEN mv.psa_8_price
-                    WHEN 'PSA 7' THEN mv.psa_7_price
-                    WHEN 'BGS 10' THEN mv.bgs_10_price
-                    WHEN 'BGS 9.5' THEN mv.cgc_9_5_price
-                    WHEN 'BGS 9' THEN mv.psa_9_price
-                    WHEN 'CGC 10' THEN mv.bgs_10_price
-                    WHEN 'CGC 9.5' THEN mv.cgc_9_5_price
-                    WHEN 'CGC 9' THEN mv.psa_9_price
-                    WHEN 'Raw' THEN mv.raw_ungraded_price
-                    WHEN 'Ungraded' THEN mv.raw_ungraded_price
-                    WHEN 'Unknown' THEN mv.raw_ungraded_price
-                    ELSE NULL
-                END * 100)::numeric, 1)
-            ELSE NULL
-        END as percent_vs_avg
+        END, 0) as price_diff
     FROM listings l
     CROSS JOIN latest_market_values mv
-    LEFT JOIN reviewed_listings rl ON l.item_id = rl.item_id
     WHERE l.is_active = true
-        AND (rl.user_action IS NULL OR rl.id IS NULL)
-    ORDER BY l.last_seen DESC
-    LIMIT 50
+    ORDER BY price_diff ASC
+    LIMIT 100
     """
 
     with db.conn.cursor() as cursor:
@@ -261,323 +189,126 @@ def load_unreviewed_listings():
     return pd.DataFrame(data, columns=columns)
 
 
-def save_feedback(item_id, title, grade, total_cost, avg_price, percent_vs_avg,
-                  action, rating, notes, url, image_url, seller_username,
-                  seller_feedback, is_auction, listing_type, condition,
-                  rating_reasons, priorities, concerns, is_graded=None):
-    """Save user feedback with qualitative data to reviewed_listings table."""
-    db = get_db_connection()
+def display_listing_card(listing, grade_matcher):
+    """Display a single listing with facts only."""
 
-    # Extract grading company from grade if graded
-    grading_company = None
-    if is_graded and grade and grade not in ['Raw', 'Unknown']:
-        grade_parts = grade.split()
-        grading_company = grade_parts[0] if grade_parts else None
-
-    # Combine qualitative feedback into structured notes
-    qualitative_notes = []
-
-    # Add grade and grading company as attributes
-    if grade:
-        qualitative_notes.append(f"GRADE: {grade}")
-    if grading_company:
-        qualitative_notes.append(f"GRADING_COMPANY: {grading_company}")
-    if is_graded is not None:
-        qualitative_notes.append(f"IS_GRADED: {is_graded}")
-
-    if rating_reasons:
-        qualitative_notes.append(f"REASONS: {', '.join(rating_reasons)}")
-
-    if priorities:
-        qualitative_notes.append(f"PRIORITIES: {', '.join(priorities)}")
-
-    if concerns:
-        qualitative_notes.append(f"CONCERNS: {', '.join(concerns)}")
-
-    if notes:
-        qualitative_notes.append(f"NOTES: {notes}")
-
-    combined_notes = " | ".join(qualitative_notes)
-
-    # Insert/update reviewed listing
-    insert_query = """
-    INSERT INTO reviewed_listings (
-        item_id, title, grade, total_cost, avg_price, percent_below_avg,
-        listing_type, seller_username, seller_feedback, is_auction,
-        condition, url, image_url,
-        user_action, user_rating, action_timestamp, notes
-    ) VALUES (
-        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-        %s, %s, CURRENT_TIMESTAMP, %s
-    )
-    ON CONFLICT (item_id)
-    DO UPDATE SET
-        user_action = EXCLUDED.user_action,
-        user_rating = EXCLUDED.user_rating,
-        action_timestamp = CURRENT_TIMESTAMP,
-        notes = EXCLUDED.notes
-    """
-
-    with db.conn.cursor() as cursor:
-        cursor.execute(insert_query, (
-            item_id, title, grade, total_cost, avg_price, percent_vs_avg,
-            listing_type, seller_username, seller_feedback, is_auction, condition,
-            url, image_url,
-            action, rating, combined_notes
-        ))
-
-    db.conn.commit()
-
-
-def display_listing_card(listing):
-    """Display a single listing for review with feedback."""
-
-    # Create columns for layout
     col1, col2 = st.columns([1, 2])
 
     with col1:
-        # Show image if available
         if listing['image_url']:
             st.image(listing['image_url'], use_container_width=True)
         else:
             st.info("No image available")
 
     with col2:
-        # Title and basic info
+        # Title
         st.subheader(listing['title'])
 
-        # Extract grade/condition info for proper market value display
+        st.markdown("---")
+
+        # Listing Price
+        shipping = listing.get('shipping', 0) or 0
+        st.write(f"**Listing Price:** ${listing['total_cost']:,.2f}")
+        if shipping > 0:
+            st.write(f"(${listing['price']:,.2f} + ${shipping:.2f} shipping)")
+        else:
+            st.write("(Free shipping)")
+
+        # Market Value from PriceCharting
         is_graded = listing.get('is_graded', False)
         raw_condition = listing.get('raw_condition', 'N/A')
         grade = listing.get('grade', 'Unknown')
-        shipping = listing.get('shipping', 0) or 0
 
-        # Calculate the actual market value based on grade/condition
-        grade_matcher = get_grade_matcher()
-        actual_market_value = None
-        avg_label = ""
+        market_value = None
+        market_label = ""
 
         if grade_matcher:
             if is_graded and grade and grade != 'Unknown':
-                # For graded cards, get the value for that specific grade
-                actual_market_value = grade_matcher.get_comparable_market_value(grade)
-                avg_label = f"{grade} Average"
+                market_value = grade_matcher.get_comparable_market_value(grade)
+                market_label = f"Market Value ({grade})"
             elif not is_graded and raw_condition and raw_condition not in ['N/A', 'None', None]:
-                # For raw cards, get condition-adjusted value
-                actual_market_value = grade_matcher.get_comparable_market_value('Raw', raw_condition)
+                market_value = grade_matcher.get_comparable_market_value('Raw', raw_condition)
                 psa_range = CONDITION_TO_PSA_RANGE.get(raw_condition, '')
-                avg_label = f"{raw_condition} / {psa_range} Average" if psa_range else f"{raw_condition} Average"
-            elif listing['avg_price']:
-                # Fallback to avg_price from query
-                actual_market_value = listing['avg_price']
-                avg_label = "Market Average"
+                market_label = f"Market Value ({raw_condition})" if not psa_range else f"Market Value ({raw_condition} / {psa_range})"
+            elif listing.get('market_value'):
+                market_value = listing['market_value']
+                market_label = "Market Value"
 
-        # Build the single-row info display
-        # Format: Price | Shipping | Graded/Ungraded | Company (if graded) | Grade (if graded) / Condition (if raw) | Average
-        info_parts = []
+        if market_value:
+            st.write(f"**{market_label}:** ${market_value:,.2f}")
 
-        # Price
-        info_parts.append(f"**${listing['total_cost']:,.2f}**")
+        st.markdown("---")
 
-        # Shipping
-        if shipping > 0:
-            info_parts.append(f"Shipping: ${shipping:.2f}")
-        else:
-            info_parts.append("Free Shipping")
-
-        # Graded status
+        # Listing attributes
         if is_graded:
-            info_parts.append("Graded")
-            # Extract grading company and grade value
-            grade_parts = grade.split()
-            if len(grade_parts) >= 2:
-                grading_company = grade_parts[0]
-                grade_value = ' '.join(grade_parts[1:])
-                info_parts.append(grading_company)
-                info_parts.append(grade_value)
-            else:
-                info_parts.append(grade)
+            st.write(f"**Grade:** {grade}")
+            st.write(f"**Condition:** Graded")
         else:
-            info_parts.append("Ungraded")
-            # Condition for raw
+            st.write(f"**Grade:** Ungraded")
             if raw_condition and raw_condition not in ['N/A', 'None', None]:
-                info_parts.append(raw_condition)
+                st.write(f"**Condition:** {raw_condition}")
 
-        # Average price
-        if actual_market_value:
-            info_parts.append(f"{avg_label}: ${actual_market_value:,.2f}")
+        st.write(f"**Seller:** {listing['seller_username']} ({listing['seller_feedback']}% feedback)")
+        st.write(f"**Type:** {listing['listing_type']}")
 
-        # Display as a single row
-        st.write(" | ".join(info_parts))
-
-        # Seller info on second line
-        st.write(f"**Seller:** {listing['seller_username']} ({listing['seller_feedback']}% feedback) | **Type:** {listing['listing_type']}")
-
-        # Link
-        st.markdown(f"[View on eBay]({listing['url']})")
-
-    st.divider()
-
-    # Feedback Section
-    st.subheader("Your Feedback")
-
-    # Row 1: Action and Rating
-    feedback_col1, feedback_col2 = st.columns(2)
-
-    with feedback_col1:
-        action = st.radio(
-            "Action",
-            options=["purchased", "watching", "interested", "maybe_later", "dismissed"],
-            format_func=lambda x: {
-                "purchased": "Purchased / Would Purchase",
-                "watching": "Watching / Very Interested",
-                "interested": "Interested",
-                "maybe_later": "Maybe Later",
-                "dismissed": "Not Interested"
-            }[x],
-            key=f"action_{listing['item_id']}",
-            horizontal=False
-        )
-
-    with feedback_col2:
-        rating = st.slider(
-            "Listing Quality (1=Bad, 5=Excellent)",
-            min_value=1,
-            max_value=5,
-            value=3,
-            key=f"rating_{listing['item_id']}"
-        )
-
-    st.divider()
-
-    # Row 2: Qualitative Reasons
-    st.subheader("Why this rating?")
-
-    qual_col1, qual_col2 = st.columns(2)
-
-    with qual_col1:
-        st.write("**Positive factors:**")
-        rating_reasons_positive = st.multiselect(
-            "Select all that apply",
-            options=RATING_REASONS_POSITIVE,
-            key=f"reasons_pos_{listing['item_id']}",
-            label_visibility="collapsed"
-        )
-
-    with qual_col2:
-        st.write("**Negative factors:**")
-        rating_reasons_negative = st.multiselect(
-            "Select all that apply",
-            options=RATING_REASONS_NEGATIVE,
-            key=f"reasons_neg_{listing['item_id']}",
-            label_visibility="collapsed"
-        )
-
-    rating_reasons = rating_reasons_positive + rating_reasons_negative
-
-    st.divider()
-
-    # Additional Notes
-    priorities = []  # Keep for compatibility with save_feedback
-    concerns = []    # Keep for compatibility with save_feedback
-
-    notes = st.text_area(
-        "Additional Notes",
-        placeholder="Any other thoughts? Specific observations?",
-        key=f"notes_{listing['item_id']}"
-    )
-
-    # Submit button
-    st.divider()
-
-    # Show summary before submitting
-    with st.expander("Review Summary", expanded=False):
-        st.write(f"**Action:** {action}")
-        st.write(f"**Rating:** {rating}/5 stars")
-        if rating_reasons:
-            st.write(f"**Reasons:** {', '.join(rating_reasons)}")
-        if notes:
-            st.write(f"**Notes:** {notes}")
-
-    if st.button("Save Feedback", key=f"submit_{listing['item_id']}", type="primary", use_container_width=True):
-        save_feedback(
-            item_id=listing['item_id'],
-            title=listing['title'],
-            grade=listing['grade'],
-            total_cost=listing['total_cost'],
-            avg_price=listing['avg_price'],
-            percent_vs_avg=listing['percent_vs_avg'],
-            action=action,
-            rating=rating,
-            notes=notes,
-            url=listing['url'],
-            image_url=listing['image_url'],
-            seller_username=listing['seller_username'],
-            seller_feedback=listing['seller_feedback'],
-            is_auction=listing['is_auction'],
-            listing_type=listing['listing_type'],
-            condition=listing['condition'],
-            rating_reasons=rating_reasons,
-            priorities=priorities,
-            concerns=concerns,
-            is_graded=listing.get('is_graded', None)
-        )
-        st.success("Feedback saved successfully!")
-        st.balloons()
-        st.rerun()
+        # eBay link and hide button
+        link_col, hide_col = st.columns([3, 1])
+        with link_col:
+            st.markdown(f"[View on eBay]({listing['url']})")
+        with hide_col:
+            if st.button("Hide", key=f"hide_{listing['item_id']}"):
+                hide_listing(listing['item_id'])
+                st.rerun()
 
 
 def main():
     """Main app."""
 
-    st.title("Lugia Listing Info")
+    st.title("Listing Info")
 
-    # Sidebar stats
+    # Sidebar
+    st.sidebar.title("Filters")
+
+    # Load listings (sorted by price difference: listing - market value)
+    listings_df = load_active_listings()
+    grade_matcher = get_grade_matcher()
+
+    # Filter out hidden listings
+    hidden = get_hidden_listings()
+    if not listings_df.empty and hidden:
+        listings_df = listings_df[~listings_df['item_id'].isin(hidden)]
+
+    # Stats
+    st.sidebar.markdown("---")
     st.sidebar.title("Stats")
-
-    db = get_db_connection()
-
-    # Get counts
-    with db.conn.cursor() as cursor:
-        cursor.execute("SELECT COUNT(*) FROM listings WHERE is_active = true")
-        total_active = cursor.fetchone()[0]
-
-        cursor.execute("SELECT COUNT(*) FROM reviewed_listings WHERE user_action IS NOT NULL")
-        total_reviewed = cursor.fetchone()[0]
-
-    st.sidebar.metric("Active Listings", total_active)
-    st.sidebar.metric("Listings Reviewed", total_reviewed)
-
-    # Main content
-    st.header("Review Listings")
-
-    # Load unreviewed listings
-    listings_df = load_unreviewed_listings()
-
-    if listings_df.empty:
-        st.info("No unreviewed listings! All caught up.")
-        st.write("Wait for the next tracker run (every 6 hours) to get new listings.")
+    if not listings_df.empty:
+        st.sidebar.metric("Active Listings", len(listings_df))
     else:
-        st.write(f"**{len(listings_df)} listings** waiting for review")
+        st.sidebar.metric("Active Listings", 0)
 
-        # Filter options
-        with st.expander("Filters"):
-            filter_col1, filter_col2 = st.columns(2)
+    if hidden:
+        st.sidebar.metric("Hidden", len(hidden))
+        if st.sidebar.button("Show All Hidden"):
+            st.session_state.hidden_listings = set()
+            st.rerun()
 
-            with filter_col1:
-                grade_filter = st.multiselect(
-                    "Filter by Grade",
-                    options=listings_df['grade'].unique(),
-                    default=None
-                )
+    # Grade filter
+    if not listings_df.empty:
+        grade_filter = st.sidebar.multiselect(
+            "Filter by Grade",
+            options=sorted(listings_df['grade'].dropna().unique()),
+            default=None
+        )
 
-            with filter_col2:
-                price_range = st.slider(
-                    "Price Range",
-                    min_value=0,
-                    max_value=int(listings_df['total_cost'].max()),
-                    value=(0, int(listings_df['total_cost'].max()))
-                )
+        # Price range filter
+        min_price = int(listings_df['total_cost'].min())
+        max_price = int(listings_df['total_cost'].max())
+        price_range = st.sidebar.slider(
+            "Price Range",
+            min_value=min_price,
+            max_value=max_price,
+            value=(min_price, max_price)
+        )
 
         # Apply filters
         filtered_df = listings_df.copy()
@@ -587,18 +318,27 @@ def main():
             (filtered_df['total_cost'] >= price_range[0]) &
             (filtered_df['total_cost'] <= price_range[1])
         ]
+    else:
+        filtered_df = listings_df
 
+    # PriceCharting attribution
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("Market values from [PriceCharting.com](https://www.pricecharting.com)")
+
+    # Main content
+    if filtered_df.empty:
+        st.info("No active listings found.")
+        st.write("Wait for the next tracker run (every 6 hours) to get new listings.")
+    else:
         st.write(f"Showing **{len(filtered_df)}** listings")
 
-        # Display listings one by one
-        if not filtered_df.empty:
-            for idx, listing in filtered_df.iterrows():
-                with st.container():
-                    # Convert Series to dict to handle None values properly
-                    listing_dict = listing.to_dict()
-                    display_listing_card(listing_dict)
-                    st.divider()
-                    st.write("")  # Spacing
+        # Display listings
+        for idx, listing in filtered_df.iterrows():
+            with st.container():
+                listing_dict = listing.to_dict()
+                display_listing_card(listing_dict, grade_matcher)
+                st.divider()
+                st.write("")
 
 
 if __name__ == '__main__':
