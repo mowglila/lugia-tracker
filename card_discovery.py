@@ -225,16 +225,33 @@ def main():
         )
 
         # Save individual listings to database
+        saved_count = 0
         if individual_listings:
             print(f"\nSaving {len(individual_listings)} individual listings...")
             saved_count = db.save_discovered_listings_batch(individual_listings)
             print(f"Saved {saved_count} listings")
+
+        # Log the search run
+        db.save_search_run(
+            total_found=len(individual_listings),
+            total_filtered=max_listings - len(individual_listings),
+            total_valid=saved_count,
+            status='success'
+        )
+        print("Search run logged to database")
 
         execution_time = time.time() - start_time
         print(f"\nTotal execution time: {execution_time:.1f} seconds")
 
     except Exception as e:
         print(f"\nDiscovery failed: {e}")
+        db.save_search_run(
+            total_found=0,
+            total_filtered=0,
+            total_valid=0,
+            status='error',
+            error_message=str(e)
+        )
         raise
 
     finally:
