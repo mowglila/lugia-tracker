@@ -199,6 +199,73 @@ class DatabaseManager:
         CREATE INDEX IF NOT EXISTS idx_discovered_listings_item_id ON discovered_listings(item_id);
         CREATE INDEX IF NOT EXISTS idx_discovered_listings_card ON discovered_listings(card_name, set_name);
         CREATE INDEX IF NOT EXISTS idx_discovered_listings_price ON discovered_listings(price);
+
+        -- PriceCharting card market data (daily CSV import)
+        CREATE TABLE IF NOT EXISTS pricecharting_raw (
+            id SERIAL PRIMARY KEY,
+            product_id TEXT NOT NULL,
+            console_name TEXT,
+            product_name TEXT,
+            loose_price REAL,
+            cib_price REAL,
+            new_price REAL,
+            graded_price REAL,
+            box_only_price REAL,
+            manual_only_price REAL,
+            bgs_10_price REAL,
+            sgc_10_price REAL,
+            sales_volume INTEGER,
+            genre TEXT,
+            release_date DATE,
+            import_date DATE NOT NULL,
+            UNIQUE(product_id, import_date)
+        );
+
+        -- Card market candidates (filtered: volume >= 50, PSA 10 price >= $50)
+        CREATE TABLE IF NOT EXISTS card_market_candidates (
+            id SERIAL PRIMARY KEY,
+            product_id TEXT UNIQUE NOT NULL,
+            set_name TEXT,
+            card_name TEXT,
+            card_number TEXT,
+            card_year INTEGER,
+            psa_10_price REAL,
+            psa_9_price REAL,
+            raw_price REAL,
+            sales_volume INTEGER,
+            first_seen DATE,
+            last_updated DATE,
+            is_active BOOLEAN DEFAULT TRUE
+        );
+
+        -- Card market trends (7-day and 30-day price changes)
+        CREATE TABLE IF NOT EXISTS card_market_trends (
+            id SERIAL PRIMARY KEY,
+            product_id TEXT NOT NULL,
+            set_name TEXT,
+            card_name TEXT,
+            card_number TEXT,
+            card_year INTEGER,
+            trend_date DATE NOT NULL,
+            psa_10_price REAL,
+            psa_10_price_7d_ago REAL,
+            psa_10_price_30d_ago REAL,
+            psa_10_change_7d REAL,
+            psa_10_change_30d REAL,
+            psa_10_pct_change_7d REAL,
+            psa_10_pct_change_30d REAL,
+            sales_volume INTEGER,
+            UNIQUE(product_id, trend_date)
+        );
+
+        -- Indexes for PriceCharting card market tables
+        CREATE INDEX IF NOT EXISTS idx_pricecharting_raw_product ON pricecharting_raw(product_id);
+        CREATE INDEX IF NOT EXISTS idx_pricecharting_raw_import_date ON pricecharting_raw(import_date);
+        CREATE INDEX IF NOT EXISTS idx_pricecharting_raw_volume ON pricecharting_raw(sales_volume);
+        CREATE INDEX IF NOT EXISTS idx_card_market_candidates_product ON card_market_candidates(product_id);
+        CREATE INDEX IF NOT EXISTS idx_card_market_candidates_volume ON card_market_candidates(sales_volume);
+        CREATE INDEX IF NOT EXISTS idx_card_market_trends_product ON card_market_trends(product_id);
+        CREATE INDEX IF NOT EXISTS idx_card_market_trends_date ON card_market_trends(trend_date);
         """
 
         try:
