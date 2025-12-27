@@ -13,9 +13,10 @@ import csv
 import requests
 import re
 from datetime import date, timedelta
-from typing import Optional
+from typing import Optional, List, Tuple
 from io import StringIO
 from dotenv import load_dotenv
+from psycopg2.extras import execute_values
 
 load_dotenv('ebay.env')
 
@@ -101,10 +102,14 @@ class PriceChartingImporter:
             return None
 
     def import_raw_data(self, csv_text: str) -> int:
-        """Import CSV data into pricecharting_raw table."""
+        """Import CSV data into pricecharting_raw table using batch inserts."""
         print(f"Importing raw data for {self.import_date}...")
 
         reader = csv.DictReader(StringIO(csv_text))
+
+        # Collect all rows into batches
+        BATCH_SIZE = 5000
+        batch: List[Tuple] = []
         imported = 0
 
         insert_sql = """
@@ -113,7 +118,7 @@ class PriceChartingImporter:
             loose_price, cib_price, new_price, graded_price,
             box_only_price, manual_only_price, bgs_10_price, sgc_10_price,
             sales_volume, genre, release_date, import_date
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ) VALUES %s
         ON CONFLICT (product_id, import_date) DO UPDATE SET
             console_name = EXCLUDED.console_name,
             product_name = EXCLUDED.product_name,
@@ -133,7 +138,7 @@ class PriceChartingImporter:
         try:
             with self.db.conn.cursor() as cursor:
                 for row in reader:
-                    cursor.execute(insert_sql, (
+                    batch.append((
                         row.get('id'),
                         row.get('console-name'),
                         row.get('product-name'),
@@ -150,11 +155,17 @@ class PriceChartingImporter:
                         parse_date(row.get('release-date')),
                         self.import_date
                     ))
-                    imported += 1
 
-                    if imported % 5000 == 0:
+                    if len(batch) >= BATCH_SIZE:
+                        execute_values(cursor, insert_sql, batch)
+                        imported += len(batch)
                         print(f"  Imported {imported:,} rows...")
-                        self.db.conn.commit()
+                        batch = []
+
+                # Insert remaining rows
+                if batch:
+                    execute_values(cursor, insert_sql, batch)
+                    imported += len(batch)
 
                 self.db.conn.commit()
                 print(f"Imported {imported:,} rows into pricecharting_raw")
@@ -166,7 +177,7 @@ class PriceChartingImporter:
             return 0
 
     def update_candidates(self) -> int:
-        """Update card_market_candidates table with filtered cards."""
+        """Update card_market_candidates table with filtered cards using batch inserts."""
         print(f"Updating card market candidates (volume >= {MIN_SALES_VOLUME}, PSA 10 >= ${MIN_PSA_10_PRICE})...")
 
         # Get today's data that meets criteria
@@ -186,7 +197,7 @@ class PriceChartingImporter:
             product_id, set_name, card_name, card_number, card_year,
             psa_10_price, psa_9_price, raw_price, sales_volume,
             first_seen, last_updated, is_active
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE)
+        ) VALUES %s
         ON CONFLICT (product_id) DO UPDATE SET
             set_name = EXCLUDED.set_name,
             card_name = EXCLUDED.card_name,
@@ -201,23 +212,25 @@ class PriceChartingImporter:
         """
 
         try:
-            updated = 0
             with self.db.conn.cursor() as cursor:
                 cursor.execute(select_sql, (self.import_date, MIN_SALES_VOLUME, MIN_PSA_10_PRICE))
                 rows = cursor.fetchall()
 
+                # Build batch of values
+                batch = []
                 for row in rows:
                     product_id, console_name, product_name, psa_10, psa_9, raw_price, volume, release_date = row
                     set_name, card_name, card_number, card_year = extract_card_info(
                         console_name, product_name, release_date
                     )
-
-                    cursor.execute(upsert_sql, (
+                    batch.append((
                         product_id, set_name, card_name, card_number, card_year,
                         psa_10, psa_9, raw_price, volume,
-                        self.import_date, self.import_date
+                        self.import_date, self.import_date, True
                     ))
-                    updated += 1
+
+                if batch:
+                    execute_values(cursor, upsert_sql, batch)
 
                 # Mark cards not seen today as inactive
                 cursor.execute("""
@@ -227,8 +240,8 @@ class PriceChartingImporter:
                 """, (self.import_date,))
 
                 self.db.conn.commit()
-                print(f"Updated {updated:,} card market candidates")
-                return updated
+                print(f"Updated {len(batch):,} card market candidates")
+                return len(batch)
 
         except Exception as e:
             print(f"Error updating candidates: {e}")
@@ -236,7 +249,7 @@ class PriceChartingImporter:
             return 0
 
     def calculate_trends(self) -> int:
-        """Calculate price trends comparing to 7 and 30 days ago."""
+        """Calculate price trends comparing to 7 and 30 days ago using batch inserts."""
         print("Calculating card market trends...")
 
         date_7d_ago = self.import_date - timedelta(days=7)
@@ -269,7 +282,7 @@ class PriceChartingImporter:
             trend_date, psa_10_price, psa_10_price_7d_ago, psa_10_price_30d_ago,
             psa_10_change_7d, psa_10_change_30d,
             psa_10_pct_change_7d, psa_10_pct_change_30d, sales_volume
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ) VALUES %s
         ON CONFLICT (product_id, trend_date) DO UPDATE SET
             set_name = EXCLUDED.set_name,
             card_name = EXCLUDED.card_name,
@@ -284,7 +297,6 @@ class PriceChartingImporter:
         """
 
         try:
-            updated = 0
             with self.db.conn.cursor() as cursor:
                 cursor.execute(select_sql, (
                     date_7d_ago, date_30d_ago, self.import_date,
@@ -292,6 +304,8 @@ class PriceChartingImporter:
                 ))
                 rows = cursor.fetchall()
 
+                # Build batch of values
+                batch = []
                 for row in rows:
                     (product_id, console_name, product_name, release_date,
                      today_price, volume, price_7d, price_30d) = row
@@ -313,16 +327,18 @@ class PriceChartingImporter:
                         change_30d = today_price - price_30d
                         pct_30d = (change_30d / price_30d) * 100 if price_30d else None
 
-                    cursor.execute(upsert_sql, (
+                    batch.append((
                         product_id, set_name, card_name, card_number, card_year,
                         self.import_date, today_price, price_7d, price_30d,
                         change_7d, change_30d, pct_7d, pct_30d, volume
                     ))
-                    updated += 1
+
+                if batch:
+                    execute_values(cursor, upsert_sql, batch)
 
                 self.db.conn.commit()
-                print(f"Calculated {updated:,} card market trends")
-                return updated
+                print(f"Calculated {len(batch):,} card market trends")
+                return len(batch)
 
         except Exception as e:
             print(f"Error calculating card market trends: {e}")
