@@ -651,7 +651,6 @@ def load_active_listings():
       AND l.title NOT ILIKE '%%U Pick%%'
       AND l.title NOT ILIKE '%%You Pick%%'
     ORDER BY price_diff ASC
-    LIMIT 100
     """
 
     with db.conn.cursor() as cursor:
