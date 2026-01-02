@@ -191,6 +191,7 @@ def load_big_mover_listings(db):
       AND d.seller_feedback >= 50
       AND (d.is_multi_variation = FALSE OR d.is_multi_variation IS NULL)
       AND SPLIT_PART(d.item_id, '|', 3) = '0'
+      AND d.discovered_at >= CURRENT_DATE - INTERVAL '3 days'
       AND d.title NOT ILIKE '%%Choose Your Card%%'
       AND d.title NOT ILIKE '%%Choose Your%%'
       AND d.title NOT ILIKE '%%Pick Your Card%%'
@@ -253,6 +254,7 @@ def load_wishlist_listings(db):
       AND d.seller_feedback >= 50
       AND (d.is_multi_variation = FALSE OR d.is_multi_variation IS NULL)
       AND SPLIT_PART(d.item_id, '|', 3) = '0'
+      AND d.discovered_at >= CURRENT_DATE - INTERVAL '3 days'
       AND d.title NOT ILIKE '%%Choose Your Card%%'
       AND d.title NOT ILIKE '%%Choose Your%%'
       AND d.title NOT ILIKE '%%Pick Your Card%%'
@@ -314,8 +316,10 @@ def load_highend_listings(db):
       AND d.card_name IS NOT NULL
       AND d.card_name != ''
       AND d.seller_feedback >= 50
+      AND d.price >= 300
       AND (d.is_multi_variation = FALSE OR d.is_multi_variation IS NULL)
       AND SPLIT_PART(d.item_id, '|', 3) = '0'
+      AND d.discovered_at >= CURRENT_DATE - INTERVAL '3 days'
       AND d.title NOT ILIKE '%%Choose Your Card%%'
       AND d.title NOT ILIKE '%%Choose Your%%'
       AND d.title NOT ILIKE '%%Pick Your Card%%'
