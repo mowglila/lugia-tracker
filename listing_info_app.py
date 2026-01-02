@@ -175,6 +175,7 @@ def load_big_mover_listings(db):
         d.image_url,
         d.variant_attributes,
         d.seller_feedback,
+        d.discovered_at,
         'mover' as interest
     FROM discovered_listings d
     INNER JOIN (
@@ -190,6 +191,7 @@ def load_big_mover_listings(db):
       AND d.card_name != ''
       AND d.seller_feedback >= 50
       AND (d.is_multi_variation = FALSE OR d.is_multi_variation IS NULL)
+      AND SPLIT_PART(d.item_id, '|', 3) = '0'
       AND d.title NOT ILIKE '%%Choose Your Card%%'
       AND d.title NOT ILIKE '%%Choose Your%%'
       AND d.title NOT ILIKE '%%Pick Your Card%%'
@@ -236,6 +238,7 @@ def load_wishlist_listings(db):
         d.image_url,
         d.variant_attributes,
         d.seller_feedback,
+        d.discovered_at,
         'demand' as interest
     FROM discovered_listings d
     INNER JOIN (
@@ -251,6 +254,7 @@ def load_wishlist_listings(db):
       AND d.card_name != ''
       AND d.seller_feedback >= 50
       AND (d.is_multi_variation = FALSE OR d.is_multi_variation IS NULL)
+      AND SPLIT_PART(d.item_id, '|', 3) = '0'
       AND d.title NOT ILIKE '%%Choose Your Card%%'
       AND d.title NOT ILIKE '%%Choose Your%%'
       AND d.title NOT ILIKE '%%Pick Your Card%%'
@@ -705,6 +709,15 @@ def display_listing_card(listing, grade_matcher, db):
             st.write("**Grading Company:** N/A (Ungraded)")
             st.write(f"**Condition:** {actual_condition if actual_condition else 'Not specified'}")
 
+        # Listing discovery time
+        discovered_at = listing.get('discovered_at')
+        if discovered_at:
+            # Format the timestamp nicely
+            if hasattr(discovered_at, 'strftime'):
+                st.write(f"**Listed:** {discovered_at.strftime('%b %d, %Y at %I:%M %p')}")
+            else:
+                st.write(f"**Listed:** {discovered_at}")
+
         # View on eBay and Hide buttons
         link_col, hide_col = st.columns([3, 1])
         with link_col:
@@ -1052,19 +1065,44 @@ def main():
                 else:
                     market_value = pc_info.get('raw_price')
 
-            if market_value and listing_price:
-                return market_value - listing_price
-            return float('-inf')  # No value data, sort to bottom
+            if market_value and listing_price and market_value > 0:
+                value_diff = market_value - listing_price
+                discount_pct = (value_diff / market_value) * 100  # Percentage below market
+                return pd.Series({
+                    'value_diff': value_diff,
+                    'market_value': market_value,
+                    'discount_pct': discount_pct
+                })
+            return pd.Series({
+                'value_diff': float('-inf'),
+                'market_value': None,
+                'discount_pct': None
+            })
 
-        # Calculate value_diff for each listing
-        all_listings['value_diff'] = all_listings.apply(calculate_value_diff, axis=1)
+        # Calculate value_diff, market_value, and discount_pct for each listing
+        calc_results = all_listings.apply(calculate_value_diff, axis=1)
+        all_listings['value_diff'] = calc_results['value_diff']
+        all_listings['market_value'] = calc_results['market_value']
+        all_listings['discount_pct'] = calc_results['discount_pct']
 
-        # Sort by value_diff descending (best deals first)
+        # Sort by value_diff descending (best deals first) - default sort
         all_listings = all_listings.sort_values('value_diff', ascending=False)
 
     # Additional filters (only show if we have data)
     if not all_listings.empty:
-        # Grade filter
+        # Graded/Ungraded filter
+        graded_options = ["All", "Graded Only", "Ungraded Only"]
+        graded_filter = st.sidebar.radio(
+            "Card Type",
+            options=graded_options,
+            index=0
+        )
+        if graded_filter == "Graded Only":
+            all_listings = all_listings[all_listings['is_graded'] == True]
+        elif graded_filter == "Ungraded Only":
+            all_listings = all_listings[all_listings['is_graded'] == False]
+
+        # Grade filter (only show if graded cards exist)
         grades = all_listings['grade'].dropna().unique()
         if len(grades) > 0:
             grade_filter = st.sidebar.multiselect(
@@ -1075,6 +1113,28 @@ def main():
             if grade_filter:
                 all_listings = all_listings[all_listings['grade'].isin(grade_filter)]
 
+        # Deal quality filter (discount percentage)
+        # Filter for listings priced X% below market value
+        if 'discount_pct' in all_listings.columns:
+            valid_discounts = all_listings['discount_pct'].dropna()
+            if len(valid_discounts) > 0:
+                st.sidebar.markdown("---")
+                st.sidebar.markdown("**Deal Quality**")
+                st.sidebar.caption("Filter by % below market value")
+                discount_range = st.sidebar.slider(
+                    "Discount Range (%)",
+                    min_value=0,
+                    max_value=100,
+                    value=(15, 50),
+                    help="Show listings priced 15-50% below market value (realistic deals)"
+                )
+                all_listings = all_listings[
+                    (all_listings['discount_pct'] >= discount_range[0]) &
+                    (all_listings['discount_pct'] <= discount_range[1])
+                ]
+
+        st.sidebar.markdown("---")
+
         # Price range filter
         price_col = 'listing_price' if 'listing_price' in all_listings.columns else 'total_cost'
         if price_col in all_listings.columns:
@@ -1084,7 +1144,7 @@ def main():
                 max_price = int(prices.max())
                 if min_price < max_price:
                     price_range = st.sidebar.slider(
-                        "Price Range",
+                        "Price Range ($)",
                         min_value=min_price,
                         max_value=max_price,
                         value=(min_price, max_price)
@@ -1093,6 +1153,24 @@ def main():
                         (all_listings[price_col] >= price_range[0]) &
                         (all_listings[price_col] <= price_range[1])
                     ]
+
+        # Sort options (default sort by value_diff is already applied internally)
+        st.sidebar.markdown("---")
+        sort_options = ["Newest First", "Price: Low to High", "Price: High to Low"]
+        sort_by = st.sidebar.selectbox(
+            "Sort By",
+            options=sort_options,
+            index=None,
+            placeholder="Select sort order"
+        )
+        if sort_by == "Newest First":
+            if 'discovered_at' in all_listings.columns:
+                all_listings = all_listings.sort_values('discovered_at', ascending=False, na_position='last')
+        elif sort_by == "Price: Low to High":
+            all_listings = all_listings.sort_values(price_col, ascending=True)
+        elif sort_by == "Price: High to Low":
+            all_listings = all_listings.sort_values(price_col, ascending=False)
+        # When no option selected, keeps default sort by value_diff from line 1076
 
     # Sidebar - Stats
     st.sidebar.markdown("---")
