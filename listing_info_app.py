@@ -137,7 +137,6 @@ def load_lugia_listings(db):
       AND l.title NOT ILIKE '%%U Pick%%'
       AND l.title NOT ILIKE '%%You Pick%%'
     ORDER BY l.total_cost ASC
-    LIMIT 100
     """
     try:
         with db.conn.cursor() as cursor:
@@ -200,7 +199,6 @@ def load_big_mover_listings(db):
       AND d.title NOT ILIKE '%%U Pick%%'
       AND d.title NOT ILIKE '%%You Pick%%'
     ORDER BY b.volume_7d DESC, d.price ASC
-    LIMIT 100
     """
     try:
         with db.conn.cursor() as cursor:
@@ -263,7 +261,6 @@ def load_wishlist_listings(db):
       AND d.title NOT ILIKE '%%U Pick%%'
       AND d.title NOT ILIKE '%%You Pick%%'
     ORDER BY w.wishlist_count DESC, d.price ASC
-    LIMIT 100
     """
     try:
         with db.conn.cursor() as cursor:
@@ -327,7 +324,6 @@ def load_highend_listings(db):
       AND d.title NOT ILIKE '%%U Pick%%'
       AND d.title NOT ILIKE '%%You Pick%%'
     ORDER BY c.psa_10_price DESC, d.price ASC
-    LIMIT 100
     """
     try:
         with db.conn.cursor() as cursor:
@@ -1136,23 +1132,31 @@ def main():
 
             if market_value and listing_price and market_value > 0:
                 value_diff = market_value - listing_price
-                discount_pct = (value_diff / market_value) * 100  # Percentage below market
+                percent_delta = (value_diff / market_value) * 100
                 return pd.Series({
                     'value_diff': value_diff,
                     'market_value': market_value,
-                    'discount_pct': discount_pct
+                    'percent_delta': percent_delta
                 })
             return pd.Series({
                 'value_diff': float('-inf'),
                 'market_value': None,
-                'discount_pct': None
+                'percent_delta': None
             })
 
-        # Calculate value_diff, market_value, and discount_pct for each listing
+        # Calculate value_diff, market_value, and percent_delta for each listing
         calc_results = all_listings.apply(calculate_value_diff, axis=1)
         all_listings['value_diff'] = calc_results['value_diff']
         all_listings['market_value'] = calc_results['market_value']
-        all_listings['discount_pct'] = calc_results['discount_pct']
+        all_listings['percent_delta'] = calc_results['percent_delta']
+
+        # Filter by value_diff percentage (data quality filter)
+        # Only include listings where listing price is 25-50% below market value
+        # This filters out likely incorrect matches or mislabeled items
+        all_listings = all_listings[
+            (all_listings['percent_delta'] >= 25) &
+            (all_listings['percent_delta'] <= 50)
+        ]
 
         # Sort by value_diff descending (best deals first) - default sort
         all_listings = all_listings.sort_values('value_diff', ascending=False)
