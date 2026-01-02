@@ -231,7 +231,7 @@ class EbayAPI:
                 'filter': price_filter,
                 'limit': per_page,
                 'offset': offset,
-                'sort': 'price'  # Sort by price to get consistent results
+                'sort': 'newlyListed'  # Sort by newest listings for better price distribution
             }
 
             # Add query if provided

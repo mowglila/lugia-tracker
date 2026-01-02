@@ -324,7 +324,7 @@ def main():
 
     try:
         # Get parameters from environment or use defaults
-        max_listings = int(os.getenv('MAX_LISTINGS', '2000'))
+        max_listings = int(os.getenv('MAX_LISTINGS', '3000'))
         price_filter = float(os.getenv('PRICE_FILTER', '50.0'))
 
         print(f"Discovery parameters:")
