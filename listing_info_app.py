@@ -277,6 +277,70 @@ def load_wishlist_listings(db):
     return pd.DataFrame()
 
 
+def load_highend_listings(db):
+    """
+    Load eBay listings for high-end cards from card_market_candidates.
+    Filters for cards with PSA 10 price >= $300.
+    Fuzzy match on card_name + set_name from discovered_listings.
+    """
+    query = """
+    SELECT
+        d.item_id,
+        d.card_name,
+        d.set_name,
+        d.card_number,
+        d.grade,
+        d.grading_company,
+        d.price as listing_price,
+        d.price,
+        0 as shipping,
+        d.condition,
+        COALESCE((d.variant_attributes->>'is_graded')::boolean, false) as is_graded,
+        d.variant_attributes->>'condition' as raw_condition,
+        d.url,
+        d.image_url,
+        d.variant_attributes,
+        d.seller_feedback,
+        d.discovered_at,
+        'highend' as interest
+    FROM discovered_listings d
+    INNER JOIN (
+        SELECT card_name, set_name, card_number, psa_10_price
+        FROM card_market_candidates
+        WHERE is_active = true
+          AND psa_10_price >= 300
+    ) c ON (
+        d.card_name ILIKE '%%' || c.card_name || '%%'
+        AND d.set_name ILIKE '%%' || REGEXP_REPLACE(c.set_name, '^Pokemon ', '') || '%%'
+    )
+    WHERE d.is_active = true
+      AND d.card_name IS NOT NULL
+      AND d.card_name != ''
+      AND d.seller_feedback >= 50
+      AND (d.is_multi_variation = FALSE OR d.is_multi_variation IS NULL)
+      AND SPLIT_PART(d.item_id, '|', 3) = '0'
+      AND d.title NOT ILIKE '%%Choose Your Card%%'
+      AND d.title NOT ILIKE '%%Choose Your%%'
+      AND d.title NOT ILIKE '%%Pick Your Card%%'
+      AND d.title NOT ILIKE '%%Pick Your%%'
+      AND d.title NOT ILIKE '%%You Choose%%'
+      AND d.title NOT ILIKE '%%U Pick%%'
+      AND d.title NOT ILIKE '%%You Pick%%'
+    ORDER BY c.psa_10_price DESC, d.price ASC
+    LIMIT 100
+    """
+    try:
+        with db.conn.cursor() as cursor:
+            cursor.execute(query)
+            columns = [desc[0] for desc in cursor.description]
+            data = cursor.fetchall()
+        if data:
+            return pd.DataFrame(data, columns=columns)
+    except Exception as e:
+        st.error(f"Error loading High-End listings: {e}")
+    return pd.DataFrame()
+
+
 def extract_pokemon_name(title):
     """
     Extract Pokemon name from eBay listing title.
@@ -927,11 +991,11 @@ def main():
     st.sidebar.title("Filters")
 
     # Interest filter
-    interest_options = ["Lugia", "Demand", "Mover"]
+    interest_options = ["Lugia", "Demand", "Mover", "High-End"]
     interest_filter = st.sidebar.multiselect(
         "Interest",
         options=interest_options,
-        default=["Mover"]
+        default=["High-End"]
     )
 
     # Load data based on interest selection
@@ -951,6 +1015,11 @@ def main():
         wishlist_df = load_wishlist_listings(db)
         if not wishlist_df.empty:
             all_listings = pd.concat([all_listings, wishlist_df], ignore_index=True)
+
+    if "High-End" in interest_filter:
+        highend_df = load_highend_listings(db)
+        if not highend_df.empty:
+            all_listings = pd.concat([all_listings, highend_df], ignore_index=True)
 
     # Filter out hidden listings
     hidden = get_hidden_listings()
