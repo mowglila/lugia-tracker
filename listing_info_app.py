@@ -304,7 +304,7 @@ def load_highend_listings(db):
     INNER JOIN (
         SELECT card_name, set_name, card_number, psa_10_price
         FROM card_market_candidates
-        WHERE is_active = true
+        WHERE last_updated = (SELECT MAX(last_updated) FROM card_market_candidates)
           AND psa_10_price >= 300
     ) c ON (
         d.card_name ILIKE '%%' || c.card_name || '%%'
