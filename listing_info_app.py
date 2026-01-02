@@ -1113,26 +1113,6 @@ def main():
             if grade_filter:
                 all_listings = all_listings[all_listings['grade'].isin(grade_filter)]
 
-        # Deal quality filter (discount percentage)
-        # Filter for listings priced X% below market value
-        if 'discount_pct' in all_listings.columns:
-            valid_discounts = all_listings['discount_pct'].dropna()
-            if len(valid_discounts) > 0:
-                st.sidebar.markdown("---")
-                st.sidebar.markdown("**Deal Quality**")
-                st.sidebar.caption("Filter by % below market value")
-                discount_range = st.sidebar.slider(
-                    "Discount Range (%)",
-                    min_value=0,
-                    max_value=100,
-                    value=(15, 50),
-                    help="Show listings priced 15-50% below market value (realistic deals)"
-                )
-                all_listings = all_listings[
-                    (all_listings['discount_pct'] >= discount_range[0]) &
-                    (all_listings['discount_pct'] <= discount_range[1])
-                ]
-
         st.sidebar.markdown("---")
 
         # Price range filter
