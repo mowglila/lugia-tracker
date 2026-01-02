@@ -29,9 +29,15 @@ class DatabaseManager:
         self.init_database()
 
     def connect(self):
-        """Establish database connection."""
+        """Establish database connection with timeout settings."""
         try:
-            self.conn = psycopg2.connect(self.database_url)
+            # Connection timeout: 10 seconds to establish connection
+            # Statement timeout: 30 seconds for query execution
+            self.conn = psycopg2.connect(
+                self.database_url,
+                connect_timeout=10,
+                options='-c statement_timeout=30000'
+            )
             print("Database connection established")
         except Exception as e:
             print(f"Error connecting to database: {e}")
@@ -97,6 +103,12 @@ class DatabaseManager:
             psa_9_price REAL,
             psa_8_price REAL,
             psa_7_price REAL,
+            psa_6_price REAL,
+            psa_5_price REAL,
+            psa_4_price REAL,
+            psa_3_price REAL,
+            psa_2_price REAL,
+            psa_1_price REAL,
             cgc_10_price REAL,
             cgc_9_5_price REAL,
             cgc_9_price REAL,
@@ -108,6 +120,14 @@ class DatabaseManager:
             data_source TEXT DEFAULT 'pricecharting',
             UNIQUE(product_id, recorded_at)
         );
+
+        -- Add PSA 1-6 columns if they don't exist (for existing tables)
+        ALTER TABLE market_values ADD COLUMN IF NOT EXISTS psa_6_price REAL;
+        ALTER TABLE market_values ADD COLUMN IF NOT EXISTS psa_5_price REAL;
+        ALTER TABLE market_values ADD COLUMN IF NOT EXISTS psa_4_price REAL;
+        ALTER TABLE market_values ADD COLUMN IF NOT EXISTS psa_3_price REAL;
+        ALTER TABLE market_values ADD COLUMN IF NOT EXISTS psa_2_price REAL;
+        ALTER TABLE market_values ADD COLUMN IF NOT EXISTS psa_1_price REAL;
 
         -- Tracked cards table (cards being monitored)
         CREATE TABLE IF NOT EXISTS tracked_cards (
@@ -179,10 +199,14 @@ class DatabaseManager:
             image_url TEXT,
             listing_type TEXT,
             is_auction BOOLEAN DEFAULT FALSE,
+            is_multi_variation BOOLEAN DEFAULT FALSE,
             discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             is_active BOOLEAN DEFAULT TRUE
         );
+
+        -- Add is_multi_variation column if it doesn't exist
+        ALTER TABLE discovered_listings ADD COLUMN IF NOT EXISTS is_multi_variation BOOLEAN DEFAULT FALSE;
 
         -- Create indexes for better query performance
         CREATE INDEX IF NOT EXISTS idx_listings_item_id ON listings(item_id);
@@ -201,18 +225,35 @@ class DatabaseManager:
         CREATE INDEX IF NOT EXISTS idx_discovered_listings_price ON discovered_listings(price);
 
         -- PriceCharting card market data (daily CSV import)
+        -- Grade mapping from PriceCharting API:
+        --   loose_price = Raw/Ungraded
+        --   grade_1_price = condition-9-price (Grade 1)
+        --   grade_2_price = condition-10-price (Grade 2)
+        --   grade_3_price = condition-13-price (Grade 3)
+        --   grade_7_price = cib-price (Grade 7/7.5)
+        --   grade_8_price = new-price (Grade 8/8.5)
+        --   grade_9_price = graded-price (Grade 9)
+        --   grade_9_5_price = box-only-price (Grade 9.5)
+        --   psa_10_price = manual-only-price (PSA 10)
+        --   bgs_10_price = bgs-10-price (BGS 10)
+        --   cgc_10_price = condition-17-price (CGC 10)
+        --   sgc_10_price = condition-18-price (SGC 10)
         CREATE TABLE IF NOT EXISTS pricecharting_raw (
             id SERIAL PRIMARY KEY,
             product_id TEXT NOT NULL,
             console_name TEXT,
             product_name TEXT,
             loose_price REAL,
-            cib_price REAL,
-            new_price REAL,
-            graded_price REAL,
-            box_only_price REAL,
-            manual_only_price REAL,
+            grade_1_price REAL,
+            grade_2_price REAL,
+            grade_3_price REAL,
+            grade_7_price REAL,
+            grade_8_price REAL,
+            grade_9_price REAL,
+            grade_9_5_price REAL,
+            psa_10_price REAL,
             bgs_10_price REAL,
+            cgc_10_price REAL,
             sgc_10_price REAL,
             sales_volume INTEGER,
             genre TEXT,
@@ -220,6 +261,29 @@ class DatabaseManager:
             import_date DATE NOT NULL,
             UNIQUE(product_id, import_date)
         );
+
+        -- Add new grade columns if they don't exist (for existing tables)
+        ALTER TABLE pricecharting_raw ADD COLUMN IF NOT EXISTS grade_1_price REAL;
+        ALTER TABLE pricecharting_raw ADD COLUMN IF NOT EXISTS grade_2_price REAL;
+        ALTER TABLE pricecharting_raw ADD COLUMN IF NOT EXISTS grade_3_price REAL;
+        ALTER TABLE pricecharting_raw ADD COLUMN IF NOT EXISTS grade_7_price REAL;
+        ALTER TABLE pricecharting_raw ADD COLUMN IF NOT EXISTS grade_8_price REAL;
+        ALTER TABLE pricecharting_raw ADD COLUMN IF NOT EXISTS grade_9_price REAL;
+        ALTER TABLE pricecharting_raw ADD COLUMN IF NOT EXISTS grade_9_5_price REAL;
+        ALTER TABLE pricecharting_raw ADD COLUMN IF NOT EXISTS psa_10_price REAL;
+        ALTER TABLE pricecharting_raw ADD COLUMN IF NOT EXISTS cgc_10_price REAL;
+
+        -- Migration: rename old columns to new names if they exist
+        -- manual_only_price -> psa_10_price (handled by ADD COLUMN IF NOT EXISTS above)
+        -- Copy data from old columns to new if needed
+        UPDATE pricecharting_raw SET psa_10_price = manual_only_price WHERE psa_10_price IS NULL AND manual_only_price IS NOT NULL;
+        UPDATE pricecharting_raw SET grade_9_price = graded_price WHERE grade_9_price IS NULL AND graded_price IS NOT NULL;
+        UPDATE pricecharting_raw SET grade_9_5_price = box_only_price WHERE grade_9_5_price IS NULL AND box_only_price IS NOT NULL;
+        UPDATE pricecharting_raw SET grade_8_price = new_price WHERE grade_8_price IS NULL AND new_price IS NOT NULL;
+        UPDATE pricecharting_raw SET grade_7_price = cib_price WHERE grade_7_price IS NULL AND cib_price IS NOT NULL;
+        UPDATE pricecharting_raw SET grade_1_price = psa_1_price WHERE grade_1_price IS NULL AND psa_1_price IS NOT NULL;
+        UPDATE pricecharting_raw SET grade_2_price = psa_2_price WHERE grade_2_price IS NULL AND psa_2_price IS NOT NULL;
+        UPDATE pricecharting_raw SET grade_3_price = psa_3_price WHERE grade_3_price IS NULL AND psa_3_price IS NOT NULL;
 
         -- Card market candidates (filtered: volume >= 50, PSA 10 price >= $50)
         CREATE TABLE IF NOT EXISTS card_market_candidates (
@@ -505,13 +569,15 @@ class DatabaseManager:
         INSERT INTO discovered_listings (
             item_id, title, card_name, set_name, card_number,
             variant_attributes, grade, grading_company, price, condition,
-            seller_username, seller_feedback, url, image_url, listing_type, is_auction
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            seller_username, seller_feedback, url, image_url, listing_type, is_auction,
+            is_multi_variation
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (item_id) DO UPDATE SET
             title = EXCLUDED.title,
             price = EXCLUDED.price,
             condition = EXCLUDED.condition,
             seller_feedback = EXCLUDED.seller_feedback,
+            is_multi_variation = EXCLUDED.is_multi_variation,
             last_seen = CURRENT_TIMESTAMP,
             is_active = TRUE
         RETURNING id;
@@ -538,7 +604,8 @@ class DatabaseManager:
                     listing.get('url'),
                     listing.get('image_url'),
                     listing.get('listing_type'),
-                    listing.get('is_auction', False)
+                    listing.get('is_auction', False),
+                    listing.get('is_multi_variation', False)
                 ))
                 self.conn.commit()
                 return True

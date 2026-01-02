@@ -102,7 +102,22 @@ class PriceChartingImporter:
             return None
 
     def import_raw_data(self, csv_text: str) -> int:
-        """Import CSV data into pricecharting_raw table using batch inserts."""
+        """Import CSV data into pricecharting_raw table using batch inserts.
+
+        Grade mapping from PriceCharting API:
+          loose-price = Raw/Ungraded
+          condition-9-price = Grade 1
+          condition-10-price = Grade 2
+          condition-13-price = Grade 3
+          cib-price = Grade 7/7.5
+          new-price = Grade 8/8.5
+          graded-price = Grade 9
+          box-only-price = Grade 9.5
+          manual-only-price = PSA 10
+          bgs-10-price = BGS 10
+          condition-17-price = CGC 10
+          condition-18-price = SGC 10
+        """
         print(f"Importing raw data for {self.import_date}...")
 
         reader = csv.DictReader(StringIO(csv_text))
@@ -115,20 +130,25 @@ class PriceChartingImporter:
         insert_sql = """
         INSERT INTO pricecharting_raw (
             product_id, console_name, product_name,
-            loose_price, cib_price, new_price, graded_price,
-            box_only_price, manual_only_price, bgs_10_price, sgc_10_price,
+            loose_price, grade_1_price, grade_2_price, grade_3_price,
+            grade_7_price, grade_8_price, grade_9_price, grade_9_5_price,
+            psa_10_price, bgs_10_price, cgc_10_price, sgc_10_price,
             sales_volume, genre, release_date, import_date
         ) VALUES %s
         ON CONFLICT (product_id, import_date) DO UPDATE SET
             console_name = EXCLUDED.console_name,
             product_name = EXCLUDED.product_name,
             loose_price = EXCLUDED.loose_price,
-            cib_price = EXCLUDED.cib_price,
-            new_price = EXCLUDED.new_price,
-            graded_price = EXCLUDED.graded_price,
-            box_only_price = EXCLUDED.box_only_price,
-            manual_only_price = EXCLUDED.manual_only_price,
+            grade_1_price = EXCLUDED.grade_1_price,
+            grade_2_price = EXCLUDED.grade_2_price,
+            grade_3_price = EXCLUDED.grade_3_price,
+            grade_7_price = EXCLUDED.grade_7_price,
+            grade_8_price = EXCLUDED.grade_8_price,
+            grade_9_price = EXCLUDED.grade_9_price,
+            grade_9_5_price = EXCLUDED.grade_9_5_price,
+            psa_10_price = EXCLUDED.psa_10_price,
             bgs_10_price = EXCLUDED.bgs_10_price,
+            cgc_10_price = EXCLUDED.cgc_10_price,
             sgc_10_price = EXCLUDED.sgc_10_price,
             sales_volume = EXCLUDED.sales_volume,
             genre = EXCLUDED.genre,
@@ -142,13 +162,17 @@ class PriceChartingImporter:
                         row.get('id'),
                         row.get('console-name'),
                         row.get('product-name'),
-                        parse_price(row.get('loose-price')),
-                        parse_price(row.get('cib-price')),
-                        parse_price(row.get('new-price')),
-                        parse_price(row.get('graded-price')),
-                        parse_price(row.get('box-only-price')),
-                        parse_price(row.get('manual-only-price')),
-                        parse_price(row.get('bgs-10-price')),
+                        parse_price(row.get('loose-price')),         # Raw/Ungraded
+                        parse_price(row.get('condition-9-price')),   # Grade 1
+                        parse_price(row.get('condition-10-price')),  # Grade 2
+                        parse_price(row.get('condition-13-price')),  # Grade 3
+                        parse_price(row.get('cib-price')),           # Grade 7/7.5
+                        parse_price(row.get('new-price')),           # Grade 8/8.5
+                        parse_price(row.get('graded-price')),        # Grade 9
+                        parse_price(row.get('box-only-price')),      # Grade 9.5
+                        parse_price(row.get('manual-only-price')),   # PSA 10
+                        parse_price(row.get('bgs-10-price')),        # BGS 10
+                        parse_price(row.get('condition-17-price')),  # CGC 10
                         parse_price(row.get('condition-18-price')),  # SGC 10
                         int(row.get('sales-volume', 0)) if row.get('sales-volume') else None,
                         row.get('genre'),

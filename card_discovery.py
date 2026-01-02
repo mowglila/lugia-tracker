@@ -101,6 +101,15 @@ class CardDiscoveryEngine:
 
             if price > 0:
                 variants = card_info.get('variant_attributes', {})
+                # Check if this is a multi-variation listing using eBay API fields
+                # itemGroupType = "SELLER_DEFINED_VARIATIONS" indicates multi-variation
+                # itemGroupHref presence also indicates it's part of a variation group
+                item_group_type = details.get('itemGroupType')
+                item_group_href = details.get('itemGroupHref')
+                is_multi_variation = (
+                    item_group_type == 'SELLER_DEFINED_VARIATIONS' or
+                    item_group_href is not None
+                )
                 individual_listings.append({
                     'item_id': item_id,
                     'title': details.get('title', ''),
@@ -117,7 +126,8 @@ class CardDiscoveryEngine:
                     'url': details.get('itemWebUrl'),
                     'image_url': details.get('image', {}).get('imageUrl'),
                     'listing_type': 'AUCTION' if details.get('currentBidPrice') else 'FIXED_PRICE',
-                    'is_auction': bool(details.get('currentBidPrice'))
+                    'is_auction': bool(details.get('currentBidPrice')),
+                    'is_multi_variation': is_multi_variation
                 })
 
             processed += 1
@@ -127,6 +137,92 @@ class CardDiscoveryEngine:
 
         print(f"  Processed {processed} listings")
         return individual_listings
+
+    def _extract_from_condition_descriptors(self, details: Dict) -> Dict:
+        """
+        Extract grading info and card condition from eBay conditionDescriptors.
+
+        The conditionDescriptors field contains:
+        - Professional Grader (e.g., "Professional Sports Authenticator (PSA)")
+        - Grade (e.g., "8", "10")
+        - Certification Number
+        - Card Condition (e.g., "Near Mint or Better")
+
+        Args:
+            details: Full item details from getItem API
+
+        Returns:
+            Dict with grade, grading_company, and detailed_condition
+        """
+        result = {
+            'grade': None,
+            'grading_company': None,
+            'detailed_condition': None,
+        }
+
+        condition_descriptors = details.get('conditionDescriptors', [])
+        for descriptor in condition_descriptors:
+            name = descriptor.get('name', '')
+            values = descriptor.get('values', [])
+
+            if not values:
+                continue
+
+            # Get the content from the first value
+            first_value = values[0]
+            content = None
+            if isinstance(first_value, dict):
+                content = first_value.get('content', None)
+            elif first_value:
+                content = first_value
+
+            if not content:
+                continue
+
+            # Extract based on descriptor name
+            if name == 'Grade':
+                result['grade'] = content
+            elif name == 'Professional Grader':
+                # Normalize grading company names
+                if 'PSA' in content or 'Professional Sports Authenticator' in content:
+                    result['grading_company'] = 'PSA'
+                elif 'CGC' in content or 'Certified Guaranty' in content:
+                    result['grading_company'] = 'CGC'
+                elif 'BGS' in content or 'Beckett' in content:
+                    result['grading_company'] = 'BGS'
+                elif 'SGC' in content:
+                    result['grading_company'] = 'SGC'
+                else:
+                    result['grading_company'] = content
+            elif 'Card Condition' in name or name == 'Condition':
+                result['detailed_condition'] = content
+
+        # Also check localizedAspects for Card Condition (used for raw cards)
+        if not result['detailed_condition']:
+            aspects = details.get('localizedAspects', [])
+            for aspect in aspects:
+                name = aspect.get('name', '')
+                value = aspect.get('value', '')
+                if name == 'Card Condition' and value:
+                    result['detailed_condition'] = value
+                    break
+
+        # Check conditionDescription field as fallback for condition
+        if not result['detailed_condition']:
+            condition_desc = details.get('conditionDescription', '')
+            if condition_desc:
+                condition_terms = [
+                    'Gem Mint', 'Near Mint', 'Mint', 'Excellent', 'Very Good',
+                    'Light Play', 'Lightly Played', 'Good', 'Moderate Play',
+                    'Heavily Played', 'Heavy Play', 'Poor', 'Damaged'
+                ]
+                condition_lower = condition_desc.lower()
+                for term in condition_terms:
+                    if term.lower() in condition_lower:
+                        result['detailed_condition'] = term
+                        break
+
+        return result
 
     def _parse_card_from_api_details(self, details: Dict) -> Optional[Dict]:
         """
@@ -162,11 +258,26 @@ class CardDiscoveryEngine:
         # Extract card number
         parsed['card_number'] = aspect_dict.get('Card Number', None)
 
+        # Extract grade, grading company, and condition from conditionDescriptors
+        descriptor_info = self._extract_from_condition_descriptors(details)
+
+        # Determine if graded - check conditionDescriptors first, then localizedAspects
+        is_graded = descriptor_info['grade'] is not None or aspect_dict.get('Graded', '').lower() == 'yes'
+
+        # Get grade - prefer conditionDescriptors over localizedAspects
+        grade = descriptor_info['grade'] or aspect_dict.get('Grade', None)
+
+        # Get grading company - prefer conditionDescriptors over localizedAspects
+        grading_company = descriptor_info['grading_company'] or aspect_dict.get('Professional Grader', None)
+
+        # Get detailed condition
+        detailed_condition = descriptor_info['detailed_condition']
+
         # Variant attributes from structured data
         parsed['variant_attributes'] = {
-            'is_graded': aspect_dict.get('Graded', '').lower() == 'yes',
-            'grade': aspect_dict.get('Grade', None),
-            'grading_company': aspect_dict.get('Professional Grader', None),
+            'is_graded': is_graded,
+            'grade': grade,
+            'grading_company': grading_company,
             'is_holo': 'Holo' in aspect_dict.get('Features', ''),
             'is_reverse_holo': 'Reverse Holo' in aspect_dict.get('Features', ''),
             'is_1st_edition': '1st Edition' in aspect_dict.get('Features', ''),
@@ -175,7 +286,9 @@ class CardDiscoveryEngine:
             'is_alt_art': 'Alternate Art' in aspect_dict.get('Features', '') or 'Alt Art' in aspect_dict.get('Features', ''),
             'is_secret_rare': 'Secret Rare' in aspect_dict.get('Rarity', ''),
             'is_rainbow_rare': 'Rainbow Rare' in aspect_dict.get('Rarity', ''),
-            'condition': aspect_dict.get('Condition', details.get('condition', None)),
+            # Use detailed condition if available, otherwise fall back to basic condition
+            'condition': detailed_condition if detailed_condition else aspect_dict.get('Condition', details.get('condition', None)),
+            'detailed_condition': detailed_condition,
             'year': aspect_dict.get('Year Manufactured', None),
             'language': aspect_dict.get('Language', 'English'),
             'finish': aspect_dict.get('Finish', None),
