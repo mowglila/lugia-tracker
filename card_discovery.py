@@ -27,13 +27,14 @@ class CardDiscoveryEngine:
         self.db = db
         self.ebay = ebay
 
-    def discover_listings(self, max_listings: int = 2000, price_filter: float = 50.0) -> List[Dict]:
+    def discover_listings(self, max_listings: int = 2000, price_filter: float = 50.0, incremental: bool = True) -> List[Dict]:
         """
         Search eBay for Pokemon cards and collect individual listing details.
 
         Args:
             max_listings: Maximum listings to fetch from eBay
             price_filter: Only fetch listings >= this price
+            incremental: If True, skip listings already in database (saves API calls)
 
         Returns:
             List of individual listing dictionaries
@@ -41,6 +42,13 @@ class CardDiscoveryEngine:
         print(f"\n{'='*60}")
         print("Card Discovery - Individual Listings")
         print(f"{'='*60}\n")
+
+        # Get existing item_ids if incremental mode
+        existing_ids = set()
+        if incremental:
+            print("Fetching existing item_ids from database...")
+            existing_ids = self.db.get_existing_item_ids()
+            print(f"  Found {len(existing_ids):,} existing listings in database")
 
         # Fetch listings from Pokemon TCG category with price filter
         print(f"Searching Pokemon TCG category for listings >= ${price_filter}...")
@@ -55,6 +63,17 @@ class CardDiscoveryEngine:
             return []
 
         print(f"  Found {len(listings)} listings >= ${price_filter}")
+
+        # Filter to only new listings if incremental
+        if incremental:
+            new_listings = [l for l in listings if l.get('itemId') not in existing_ids]
+            skipped = len(listings) - len(new_listings)
+            print(f"  Skipping {skipped:,} existing listings, {len(new_listings):,} new to process")
+            listings = new_listings
+
+        if not listings:
+            print("  No new listings to process")
+            return []
 
         # Extract individual listing details
         individual_listings = self._extract_listing_details(listings)
@@ -326,15 +345,18 @@ def main():
         # Get parameters from environment or use defaults
         max_listings = int(os.getenv('MAX_LISTINGS', '3000'))
         price_filter = float(os.getenv('PRICE_FILTER', '50.0'))
+        incremental = os.getenv('INCREMENTAL', 'true').lower() == 'true'
 
         print(f"Discovery parameters:")
         print(f"  Max Listings to Fetch: {max_listings}")
-        print(f"  Price Filter: ${price_filter}\n")
+        print(f"  Price Filter: ${price_filter}")
+        print(f"  Incremental Mode: {incremental}\n")
 
         # Discover individual listings
         individual_listings = discovery.discover_listings(
             max_listings=max_listings,
-            price_filter=price_filter
+            price_filter=price_filter,
+            incremental=incremental
         )
 
         # Save individual listings to database

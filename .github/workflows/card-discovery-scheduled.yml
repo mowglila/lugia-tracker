@@ -2,9 +2,9 @@ name: Scheduled Card Discovery
 
 on:
   schedule:
-    # Run every 12 hours (2 times per day)
-    # Times: 06:00 UTC and 18:00 UTC
-    - cron: '0 6,18 * * *'
+    # Run every 4 hours (6 times per day)
+    # Times: 00:00, 04:00, 08:00, 12:00, 16:00, 20:00 UTC
+    - cron: '0 */4 * * *'
 
   # Allow manual triggering
   workflow_dispatch:
@@ -28,13 +28,14 @@ jobs:
         python -m pip install --upgrade pip
         pip install psycopg2-binary python-dotenv requests
 
-    - name: Run card discovery
+    - name: Run card discovery (incremental)
       env:
         EBAY_APP_ID: ${{ secrets.EBAY_APP_ID }}
         EBAY_CERT_ID: ${{ secrets.EBAY_CERT_ID }}
         DATABASE_URL: ${{ secrets.DATABASE_URL }}
         PRICECHARTING_API_KEY: ${{ secrets.PRICECHARTING_API_KEY }}
         PYTHONUNBUFFERED: 1
+        INCREMENTAL: 'true'
       run: python card_discovery.py
 
     - name: Upload logs (on failure)

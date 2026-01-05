@@ -630,6 +630,22 @@ class DatabaseManager:
                 saved += 1
         return saved
 
+    def get_existing_item_ids(self) -> set:
+        """
+        Get all item_ids currently in discovered_listings.
+
+        Returns:
+            Set of item_id strings
+        """
+        try:
+            with self.conn.cursor() as cursor:
+                cursor.execute("SELECT item_id FROM discovered_listings")
+                rows = cursor.fetchall()
+                return {row[0] for row in rows}
+        except Exception as e:
+            print(f"Error fetching existing item_ids: {e}")
+            return set()
+
     def close(self):
         """Close database connection."""
         if self.conn:
