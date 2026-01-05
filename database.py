@@ -33,15 +33,43 @@ class DatabaseManager:
         try:
             # Connection timeout: 10 seconds to establish connection
             # Statement timeout: 30 seconds for query execution
+            # keepalives settings to prevent connection drops
             self.conn = psycopg2.connect(
                 self.database_url,
                 connect_timeout=10,
-                options='-c statement_timeout=30000'
+                options='-c statement_timeout=30000',
+                keepalives=1,
+                keepalives_idle=30,
+                keepalives_interval=10,
+                keepalives_count=5
             )
             print("Database connection established")
         except Exception as e:
             print(f"Error connecting to database: {e}")
             raise
+
+    def reconnect(self):
+        """Reconnect to database if connection was lost."""
+        try:
+            if self.conn:
+                try:
+                    self.conn.close()
+                except Exception:
+                    pass
+            self.connect()
+            return True
+        except Exception as e:
+            print(f"Failed to reconnect: {e}")
+            return False
+
+    def is_connected(self):
+        """Check if database connection is still alive."""
+        try:
+            with self.conn.cursor() as cursor:
+                cursor.execute("SELECT 1")
+            return True
+        except Exception:
+            return False
 
     def init_database(self):
         """Create database tables if they don't exist."""
@@ -436,6 +464,11 @@ class DatabaseManager:
         """
 
         try:
+            # Ensure connection is alive before saving
+            if not self.is_connected():
+                print("Connection lost before saving search run, reconnecting...")
+                self.reconnect()
+
             with self.conn.cursor() as cursor:
                 cursor.execute(insert_sql, (
                     total_found, total_filtered, total_valid, status, error_message
@@ -444,7 +477,10 @@ class DatabaseManager:
                 return cursor.fetchone()[0]
         except Exception as e:
             print(f"Error saving search run: {e}")
-            self.conn.rollback()
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
             return None
 
     def mark_inactive_listings(self, active_item_ids: List[str]):
@@ -614,20 +650,117 @@ class DatabaseManager:
             self.conn.rollback()
             return False
 
-    def save_discovered_listings_batch(self, listings: list) -> int:
+    def save_discovered_listings_batch(self, listings: list, batch_size: int = 100) -> int:
         """
-        Save multiple discovered listings in a batch.
+        Save multiple discovered listings in batches with periodic commits.
 
         Args:
             listings: List of listing dictionaries
+            batch_size: Number of listings to save before committing (default 100)
 
         Returns:
             Number of listings saved successfully
         """
+        import json
+
+        insert_sql = """
+        INSERT INTO discovered_listings (
+            item_id, title, card_name, set_name, card_number,
+            variant_attributes, grade, grading_company, price,
+            condition, seller_username, seller_feedback,
+            url, image_url, listing_type, is_auction, is_multi_variation
+        ) VALUES (
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+        )
+        ON CONFLICT (item_id) DO UPDATE SET
+            title = EXCLUDED.title,
+            card_name = EXCLUDED.card_name,
+            set_name = EXCLUDED.set_name,
+            card_number = EXCLUDED.card_number,
+            variant_attributes = EXCLUDED.variant_attributes,
+            grade = EXCLUDED.grade,
+            grading_company = EXCLUDED.grading_company,
+            price = EXCLUDED.price,
+            condition = EXCLUDED.condition,
+            seller_username = EXCLUDED.seller_username,
+            seller_feedback = EXCLUDED.seller_feedback,
+            url = EXCLUDED.url,
+            image_url = EXCLUDED.image_url,
+            listing_type = EXCLUDED.listing_type,
+            is_auction = EXCLUDED.is_auction,
+            is_multi_variation = EXCLUDED.is_multi_variation,
+            last_seen = CURRENT_TIMESTAMP,
+            is_active = TRUE;
+        """
+
         saved = 0
-        for listing in listings:
-            if self.save_discovered_listing(listing):
+        batch_count = 0
+
+        for i, listing in enumerate(listings):
+            try:
+                # Check connection health every batch
+                if batch_count >= batch_size:
+                    if not self.is_connected():
+                        print("  Connection lost, reconnecting...")
+                        if not self.reconnect():
+                            print("  Failed to reconnect, aborting batch")
+                            break
+                    batch_count = 0
+
+                variant_attrs = listing.get('variant_attributes', {})
+                variant_json = json.dumps(variant_attrs) if variant_attrs else None
+
+                with self.conn.cursor() as cursor:
+                    cursor.execute(insert_sql, (
+                        listing.get('item_id'),
+                        listing.get('title'),
+                        listing.get('card_name'),
+                        listing.get('set_name'),
+                        listing.get('card_number'),
+                        variant_json,
+                        listing.get('grade'),
+                        listing.get('grading_company'),
+                        listing.get('price'),
+                        listing.get('condition'),
+                        listing.get('seller_username'),
+                        listing.get('seller_feedback'),
+                        listing.get('url'),
+                        listing.get('image_url'),
+                        listing.get('listing_type'),
+                        listing.get('is_auction', False),
+                        listing.get('is_multi_variation', False)
+                    ))
+
                 saved += 1
+                batch_count += 1
+
+                # Commit every batch_size records
+                if saved % batch_size == 0:
+                    self.conn.commit()
+                    print(f"  Committed {saved}/{len(listings)} listings...")
+
+            except psycopg2.OperationalError as e:
+                print(f"  Connection error at listing {i}: {e}")
+                # Try to reconnect and continue
+                if self.reconnect():
+                    print("  Reconnected successfully, continuing...")
+                else:
+                    print("  Failed to reconnect, aborting")
+                    break
+            except Exception as e:
+                print(f"  Error saving listing {listing.get('item_id')}: {e}")
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
+
+        # Final commit for remaining records
+        try:
+            self.conn.commit()
+            print(f"  Final commit: {saved} total listings saved")
+        except Exception as e:
+            print(f"  Final commit failed: {e}")
+
         return saved
 
     def get_existing_item_ids(self) -> set:
