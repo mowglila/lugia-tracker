@@ -46,8 +46,9 @@ CONDITION_TO_GRADE = {
 }
 
 
+@st.cache_resource
 def get_db_connection():
-    """Get database connection."""
+    """Get database connection (cached)."""
     try:
         db_url = st.secrets["DATABASE_URL"]
     except (KeyError, FileNotFoundError):
@@ -63,6 +64,109 @@ def get_db_connection():
         st.error("Failed to connect to database!")
         st.error(f"Error: {str(e)}")
         st.stop()
+
+
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def load_pricecharting_data():
+    """
+    Load all PriceCharting data into memory for fast lookups.
+    Returns a dict keyed by (card_name_lower, set_name_lower, card_number) for fast matching.
+    """
+    db = get_db_connection()
+
+    query = """
+        SELECT product_name, console_name,
+               loose_price, grade_1_price, grade_2_price, grade_3_price,
+               grade_7_price, grade_8_price, grade_9_price, grade_9_5_price,
+               psa_10_price, bgs_10_price, cgc_10_price, sgc_10_price,
+               sales_volume
+        FROM pricecharting_raw
+        WHERE import_date = (SELECT MAX(import_date) FROM pricecharting_raw)
+    """
+
+    try:
+        with db.conn.cursor() as cursor:
+            cursor.execute(query)
+            rows = cursor.fetchall()
+    except Exception as e:
+        st.warning(f"Failed to load PriceCharting data: {e}")
+        return {}, []
+
+    # Build lookup structures
+    # 1. Full data list for fuzzy matching
+    all_records = []
+    for row in rows:
+        record = {
+            'product_name': row[0],
+            'console_name': row[1],
+            'raw_price': row[2],
+            'grade_1_price': row[3],
+            'grade_2_price': row[4],
+            'grade_3_price': row[5],
+            'grade_7_price': row[6],
+            'grade_8_price': row[7],
+            'grade_9_price': row[8],
+            'grade_9_5_price': row[9],
+            'psa_10_price': row[10],
+            'bgs_10_price': row[11],
+            'cgc_10_price': row[12],
+            'sgc_10_price': row[13],
+            'sales_volume': row[14],
+            # Pre-compute lowercased names for faster matching
+            'product_name_lower': row[0].lower() if row[0] else '',
+            'console_name_lower': row[1].lower() if row[1] else '',
+        }
+        all_records.append(record)
+
+    return all_records
+
+
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def load_wishlist_data():
+    """Load wishlist demand data for fast lookups."""
+    db = get_db_connection()
+
+    query = """
+        SELECT card_name, wishlist_count
+        FROM wishlist_demand
+        WHERE captured_date = (SELECT MAX(captured_date) FROM wishlist_demand)
+    """
+
+    wishlist_dict = {}
+    try:
+        with db.conn.cursor() as cursor:
+            cursor.execute(query)
+            for row in cursor.fetchall():
+                card_name_lower = row[0].lower() if row[0] else ''
+                wishlist_dict[card_name_lower] = row[1]
+    except Exception:
+        pass
+
+    return wishlist_dict
+
+
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def load_big_movers_data():
+    """Load big movers volume data for fast lookups."""
+    db = get_db_connection()
+
+    query = """
+        SELECT card_name, volume_7d
+        FROM big_movers
+        WHERE captured_date = (SELECT MAX(captured_date) FROM big_movers)
+    """
+
+    movers_dict = {}
+    try:
+        with db.conn.cursor() as cursor:
+            cursor.execute(query)
+            for row in cursor.fetchall():
+                card_name_lower = row[0].lower() if row[0] else ''
+                movers_dict[card_name_lower] = row[1]
+    except Exception:
+        pass
+
+    return movers_dict
 
 
 def get_grade_matcher():
@@ -106,10 +210,12 @@ def hide_listing(item_id):
     st.session_state.hidden_listings.add(item_id)
 
 
-def load_lugia_listings(db):
+@st.cache_data(ttl=60)  # Cache for 1 minute
+def load_lugia_listings(_db):
     """
     Load Lugia listings from the listings table.
     Rigid match for Lugia #249 via direct product lookup.
+    Note: _db prefix tells Streamlit not to hash this parameter.
     """
     query = """
     SELECT
@@ -139,7 +245,7 @@ def load_lugia_listings(db):
     ORDER BY l.total_cost ASC
     """
     try:
-        with db.conn.cursor() as cursor:
+        with _db.conn.cursor() as cursor:
             cursor.execute(query)
             columns = [desc[0] for desc in cursor.description]
             data = cursor.fetchall()
@@ -150,11 +256,13 @@ def load_lugia_listings(db):
     return pd.DataFrame()
 
 
-def load_big_mover_listings(db):
+@st.cache_data(ttl=60)  # Cache for 1 minute
+def load_big_mover_listings(_db):
     """
     Load eBay listings for cards in big_movers.
     Fuzzy match on card_name + set_name from discovered_listings.
     Uses structured card metadata from eBay getItem API.
+    Note: _db prefix tells Streamlit not to hash this parameter.
     """
     query = """
     SELECT
@@ -202,7 +310,7 @@ def load_big_mover_listings(db):
     ORDER BY b.volume_7d DESC, d.price ASC
     """
     try:
-        with db.conn.cursor() as cursor:
+        with _db.conn.cursor() as cursor:
             cursor.execute(query)
             columns = [desc[0] for desc in cursor.description]
             data = cursor.fetchall()
@@ -213,7 +321,8 @@ def load_big_mover_listings(db):
     return pd.DataFrame()
 
 
-def load_wishlist_listings(db):
+@st.cache_data(ttl=60)  # Cache for 1 minute
+def load_wishlist_listings(_db):
     """
     Load eBay listings for cards in wishlist_demand.
     Fuzzy match on card_name + set_name from discovered_listings.
@@ -265,7 +374,7 @@ def load_wishlist_listings(db):
     ORDER BY w.wishlist_count DESC, d.price ASC
     """
     try:
-        with db.conn.cursor() as cursor:
+        with _db.conn.cursor() as cursor:
             cursor.execute(query)
             columns = [desc[0] for desc in cursor.description]
             data = cursor.fetchall()
@@ -276,7 +385,8 @@ def load_wishlist_listings(db):
     return pd.DataFrame()
 
 
-def load_highend_listings(db):
+@st.cache_data(ttl=60)  # Cache for 1 minute
+def load_highend_listings(_db):
     """
     Load eBay listings for high-end cards from card_market_candidates.
     Filters for cards with PSA 10 price >= $300.
@@ -330,7 +440,7 @@ def load_highend_listings(db):
     ORDER BY c.psa_10_price DESC, d.price ASC
     """
     try:
-        with db.conn.cursor() as cursor:
+        with _db.conn.cursor() as cursor:
             cursor.execute(query)
             columns = [desc[0] for desc in cursor.description]
             data = cursor.fetchall()
@@ -381,9 +491,10 @@ def extract_pokemon_name(title):
     return None
 
 
-def get_pricecharting_info(db, card_name, card_number=None, set_name=None):
+def get_pricecharting_info_cached(card_name, card_number=None, set_name=None,
+                                   pc_data=None, wishlist_data=None, movers_data=None):
     """
-    Get PriceCharting info for a card including all available grade prices.
+    Get PriceCharting info for a card using cached data (no database queries).
     Uses card_number and set_name for precise matching when available,
     falls back to fuzzy name matching otherwise.
 
@@ -397,21 +508,20 @@ def get_pricecharting_info(db, card_name, card_number=None, set_name=None):
                        raw_price, graded_price, wishlist_count, volume_7d
     """
     result = {
-        'product_name': None,       # Card name from PriceCharting
-        'console_name': None,       # Set name from PriceCharting
-        # All grade prices from PriceCharting
-        'raw_price': None,          # loose_price - Raw/Ungraded
-        'grade_1_price': None,      # condition-9-price - Grade 1
-        'grade_2_price': None,      # condition-10-price - Grade 2
-        'grade_3_price': None,      # condition-13-price - Grade 3
-        'grade_7_price': None,      # cib-price - Grade 7/7.5
-        'grade_8_price': None,      # new-price - Grade 8/8.5
-        'grade_9_price': None,      # graded-price - Grade 9
-        'grade_9_5_price': None,    # box-only-price - Grade 9.5
-        'psa_10_price': None,       # manual-only-price - PSA 10
-        'bgs_10_price': None,       # bgs-10-price - BGS 10
-        'cgc_10_price': None,       # condition-17-price - CGC 10
-        'sgc_10_price': None,       # condition-18-price - SGC 10
+        'product_name': None,
+        'console_name': None,
+        'raw_price': None,
+        'grade_1_price': None,
+        'grade_2_price': None,
+        'grade_3_price': None,
+        'grade_7_price': None,
+        'grade_8_price': None,
+        'grade_9_price': None,
+        'grade_9_5_price': None,
+        'psa_10_price': None,
+        'bgs_10_price': None,
+        'cgc_10_price': None,
+        'sgc_10_price': None,
         'wishlist_count': None,
         'volume_7d': None,
     }
@@ -419,158 +529,127 @@ def get_pricecharting_info(db, card_name, card_number=None, set_name=None):
     if not card_name:
         return result
 
-    # Query to get all price columns from pricecharting_raw
-    price_query = """
-        SELECT product_name, console_name,
-               loose_price, grade_1_price, grade_2_price, grade_3_price,
-               grade_7_price, grade_8_price, grade_9_price, grade_9_5_price,
-               psa_10_price, bgs_10_price, cgc_10_price, sgc_10_price,
-               sales_volume
-        FROM pricecharting_raw
-        WHERE {where_clause}
-          AND import_date = (SELECT MAX(import_date) FROM pricecharting_raw)
-        ORDER BY sales_volume DESC NULLS LAST
-        LIMIT 1
-    """
+    # Load cached data if not provided
+    if pc_data is None:
+        pc_data = load_pricecharting_data()
+    if wishlist_data is None:
+        wishlist_data = load_wishlist_data()
+    if movers_data is None:
+        movers_data = load_big_movers_data()
 
-    def execute_price_query(where_clause, params):
-        try:
-            with db.conn.cursor() as cursor:
-                cursor.execute(price_query.format(where_clause=where_clause), params)
-                return cursor.fetchone()
-        except Exception:
-            return None
-
-    row = None
+    card_name_lower = card_name.lower()
 
     # Helper to clean card number - handles formats like "005/025", "#005", "005"
     def clean_card_number(num):
         if not num:
             return None
-        # Remove leading # and extract number before / (e.g., "005/025" -> "005")
-        num = num.lstrip('#')
+        num = str(num).lstrip('#')
         if '/' in num:
             num = num.split('/')[0]
-        # Strip leading zeros for matching (e.g., "005" -> "5")
         num_stripped = num.lstrip('0') or '0'
         return num_stripped
 
-    # Priority 1: Match on card_name + card_number + set_name (most precise)
-    if card_number and set_name:
-        clean_num = clean_card_number(card_number)
-        clean_set = set_name.replace('Pokemon ', '').replace('Pokémon ', '').strip()
-        row = execute_price_query(
-            "product_name ILIKE %s AND (product_name ILIKE %s OR product_name ILIKE %s) AND console_name ILIKE %s",
-            (f'%{card_name}%', f'%#{clean_num}%', f'%#{clean_num} %', f'%{clean_set}%')
-        )
+    # Find best match in cached data
+    matched_record = None
+    best_volume = -1
 
-    # Priority 2: Match on card_name + card_number (validation)
-    if row is None and card_number:
-        clean_num = clean_card_number(card_number)
-        row = execute_price_query(
-            "product_name ILIKE %s AND (product_name ILIKE %s OR product_name ILIKE %s)",
-            (f'%{card_name}%', f'%#{clean_num}%', f'%#{clean_num} %')
-        )
+    clean_num = clean_card_number(card_number) if card_number else None
+    clean_set = set_name.replace('Pokemon ', '').replace('Pokémon ', '').strip().lower() if set_name else None
 
-    # Priority 3: Match on card_name + set_name
-    if row is None and set_name:
-        clean_set = set_name.replace('Pokemon ', '').replace('Pokémon ', '').strip()
-        row = execute_price_query(
-            "product_name ILIKE %s AND console_name ILIKE %s",
-            (f'%{card_name}%', f'%{clean_set}%')
-        )
+    for record in pc_data:
+        product_lower = record['product_name_lower']
+        console_lower = record['console_name_lower']
 
-    # Priority 4: Fallback to card name only (least precise, only for specific card types)
-    if row is None:
-        specific_terms = ['VMAX', 'VMax', 'GX', 'EX', 'ex', 'V ', ' V', 'VSTAR', 'Radiant',
-                          'Full Art', 'Illustration Rare', 'Gold', 'Rainbow']
-        is_specific = any(term in card_name for term in specific_terms)
-        if is_specific:
-            row = execute_price_query(
-                "product_name ILIKE %s",
-                (f'%{card_name}%',)
-            )
+        # Check if card name matches
+        if card_name_lower not in product_lower:
+            continue
 
-    # Extract prices from matched row
-    if row:
-        result['product_name'] = row[0]
-        result['console_name'] = row[1]
-        result['raw_price'] = row[2]
-        result['grade_1_price'] = row[3]
-        result['grade_2_price'] = row[4]
-        result['grade_3_price'] = row[5]
-        result['grade_7_price'] = row[6]
-        result['grade_8_price'] = row[7]
-        result['grade_9_price'] = row[8]
-        result['grade_9_5_price'] = row[9]
-        result['psa_10_price'] = row[10]
-        result['bgs_10_price'] = row[11]
-        result['cgc_10_price'] = row[12]
-        result['sgc_10_price'] = row[13]
-        result['volume_7d'] = row[14]
+        # Priority 1: Match on card_name + card_number + set_name
+        if clean_num and clean_set:
+            num_match = f'#{clean_num}' in product_lower or f'#{clean_num} ' in product_lower
+            set_match = clean_set in console_lower
+            if num_match and set_match:
+                volume = record['sales_volume'] or 0
+                if volume > best_volume:
+                    matched_record = record
+                    best_volume = volume
+                continue
 
-    # Get wishlist count - use precise matching when possible
-    try:
-        with db.conn.cursor() as cursor:
-            if card_number:
-                cursor.execute("""
-                    SELECT wishlist_count
-                    FROM wishlist_demand
-                    WHERE captured_date = (SELECT MAX(captured_date) FROM wishlist_demand)
-                      AND card_name ILIKE %s
-                      AND card_name ILIKE %s
-                    LIMIT 1
-                """, (f'%{card_name}%', f'%{card_number}%'))
-                row = cursor.fetchone()
-                if row:
-                    result['wishlist_count'] = row[0]
+        # Priority 2: Match on card_name + card_number
+        if clean_num and matched_record is None:
+            num_match = f'#{clean_num}' in product_lower or f'#{clean_num} ' in product_lower
+            if num_match:
+                volume = record['sales_volume'] or 0
+                if volume > best_volume:
+                    matched_record = record
+                    best_volume = volume
+                continue
 
-            if result['wishlist_count'] is None:
-                cursor.execute("""
-                    SELECT wishlist_count
-                    FROM wishlist_demand
-                    WHERE captured_date = (SELECT MAX(captured_date) FROM wishlist_demand)
-                      AND card_name ILIKE %s
-                    LIMIT 1
-                """, (f'%{card_name}%',))
-                row = cursor.fetchone()
-                if row:
-                    result['wishlist_count'] = row[0]
-    except Exception:
-        pass
+        # Priority 3: Match on card_name + set_name
+        if clean_set and matched_record is None:
+            if clean_set in console_lower:
+                volume = record['sales_volume'] or 0
+                if volume > best_volume:
+                    matched_record = record
+                    best_volume = volume
+                continue
+
+        # Priority 4: Fallback to card name only (only for specific card types)
+        if matched_record is None:
+            specific_terms = ['vmax', 'gx', 'ex', 'vstar', 'radiant',
+                              'full art', 'illustration rare', 'gold', 'rainbow']
+            if any(term in card_name_lower for term in specific_terms):
+                volume = record['sales_volume'] or 0
+                if volume > best_volume:
+                    matched_record = record
+                    best_volume = volume
+
+    # Extract prices from matched record
+    if matched_record:
+        result['product_name'] = matched_record['product_name']
+        result['console_name'] = matched_record['console_name']
+        result['raw_price'] = matched_record['raw_price']
+        result['grade_1_price'] = matched_record['grade_1_price']
+        result['grade_2_price'] = matched_record['grade_2_price']
+        result['grade_3_price'] = matched_record['grade_3_price']
+        result['grade_7_price'] = matched_record['grade_7_price']
+        result['grade_8_price'] = matched_record['grade_8_price']
+        result['grade_9_price'] = matched_record['grade_9_price']
+        result['grade_9_5_price'] = matched_record['grade_9_5_price']
+        result['psa_10_price'] = matched_record['psa_10_price']
+        result['bgs_10_price'] = matched_record['bgs_10_price']
+        result['cgc_10_price'] = matched_record['cgc_10_price']
+        result['sgc_10_price'] = matched_record['sgc_10_price']
+        result['volume_7d'] = matched_record['sales_volume']
+
+    # Get wishlist count from cached data
+    for wl_name, wl_count in wishlist_data.items():
+        if card_name_lower in wl_name:
+            if card_number and str(card_number) in wl_name:
+                result['wishlist_count'] = wl_count
+                break
+            elif result['wishlist_count'] is None:
+                result['wishlist_count'] = wl_count
 
     # Get 7-day volume from big_movers if not already found
     if result['volume_7d'] is None:
-        try:
-            with db.conn.cursor() as cursor:
-                if card_number:
-                    cursor.execute("""
-                        SELECT volume_7d
-                        FROM big_movers
-                        WHERE captured_date = (SELECT MAX(captured_date) FROM big_movers)
-                          AND card_name ILIKE %s
-                          AND card_name ILIKE %s
-                        LIMIT 1
-                    """, (f'%{card_name}%', f'%{card_number}%'))
-                    row = cursor.fetchone()
-                    if row:
-                        result['volume_7d'] = row[0]
-
-                if result['volume_7d'] is None:
-                    cursor.execute("""
-                        SELECT volume_7d
-                        FROM big_movers
-                        WHERE captured_date = (SELECT MAX(captured_date) FROM big_movers)
-                          AND card_name ILIKE %s
-                        LIMIT 1
-                    """, (f'%{card_name}%',))
-                    row = cursor.fetchone()
-                    if row:
-                        result['volume_7d'] = row[0]
-        except Exception:
-            pass
+        for mv_name, mv_vol in movers_data.items():
+            if card_name_lower in mv_name:
+                if card_number and str(card_number) in mv_name:
+                    result['volume_7d'] = mv_vol
+                    break
+                elif result['volume_7d'] is None:
+                    result['volume_7d'] = mv_vol
 
     return result
+
+
+def get_pricecharting_info(db, card_name, card_number=None, set_name=None):
+    """
+    Wrapper for backwards compatibility.
+    Delegates to cached version.
+    """
+    return get_pricecharting_info_cached(card_name, card_number, set_name)
 
 
 def load_active_listings():
@@ -668,10 +747,18 @@ def load_active_listings():
     return pd.DataFrame(data, columns=columns)
 
 
-def display_listing_card(listing, grade_matcher, db):
+def display_listing_card(listing, grade_matcher, db, pc_data=None, wishlist_data=None, movers_data=None):
     """
     Display a single listing with eBay and PriceCharting sections visually separated.
     Per eBay API License Agreement 8.1(b)(2): eBay content must be visually isolated.
+
+    Args:
+        listing: Dict with listing data
+        grade_matcher: GradeMatcher instance
+        db: Database connection
+        pc_data: Pre-loaded PriceCharting data (optional, for performance)
+        wishlist_data: Pre-loaded wishlist data (optional, for performance)
+        movers_data: Pre-loaded big movers data (optional, for performance)
     """
     col1, col2 = st.columns([1, 2])
 
@@ -800,8 +887,9 @@ def display_listing_card(listing, grade_matcher, db):
 
         # Get PriceCharting info for THIS SPECIFIC CARD
         # Returns dict with product_name, prices, wishlist, volume
-        pc_info = get_pricecharting_info(
-            db, card_name, card_number=card_number, set_name=set_name
+        pc_info = get_pricecharting_info_cached(
+            card_name, card_number=card_number, set_name=set_name,
+            pc_data=pc_data, wishlist_data=wishlist_data, movers_data=movers_data
         )
 
         # Show PriceCharting card info if found
@@ -1031,6 +1119,11 @@ def main():
 
     # Calculate value difference (PriceCharting value - eBay listing price) for sorting
     if not all_listings.empty:
+        # Pre-load all cached data once (instead of querying per row)
+        pc_data = load_pricecharting_data()
+        wishlist_data = load_wishlist_data()
+        movers_data = load_big_movers_data()
+
         def calculate_value_diff(row):
             """Calculate PriceCharting value - listing price for a row."""
             card_name = row.get('card_name') or row.get('title', '')
@@ -1038,8 +1131,11 @@ def main():
             set_name = row.get('set_name', '')
             listing_price = row.get('listing_price') or row.get('total_cost') or 0
 
-            # Get PriceCharting info
-            pc_info = get_pricecharting_info(db, card_name, card_number=card_number, set_name=set_name)
+            # Get PriceCharting info using pre-loaded cached data
+            pc_info = get_pricecharting_info_cached(
+                card_name, card_number=card_number, set_name=set_name,
+                pc_data=pc_data, wishlist_data=wishlist_data, movers_data=movers_data
+            )
 
             # Determine market value based on grade/condition
             market_value = None
@@ -1264,11 +1360,19 @@ def main():
     else:
         st.write(f"Showing **{len(all_listings)}** listings")
 
+        # Pre-load cached data once for all listing displays
+        pc_data = load_pricecharting_data()
+        wishlist_data = load_wishlist_data()
+        movers_data = load_big_movers_data()
+
         # Display listings
         for idx, listing in all_listings.iterrows():
             with st.container():
                 listing_dict = listing.to_dict()
-                display_listing_card(listing_dict, grade_matcher, db)
+                display_listing_card(
+                    listing_dict, grade_matcher, db,
+                    pc_data=pc_data, wishlist_data=wishlist_data, movers_data=movers_data
+                )
                 st.divider()
                 st.write("")
 
