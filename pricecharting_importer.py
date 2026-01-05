@@ -208,12 +208,12 @@ class PriceChartingImporter:
         select_sql = """
         SELECT
             product_id, console_name, product_name,
-            manual_only_price, graded_price, loose_price,
+            psa_10_price, grade_9_price, loose_price,
             sales_volume, release_date
         FROM pricecharting_raw
         WHERE import_date = %s
           AND sales_volume >= %s
-          AND manual_only_price >= %s;
+          AND psa_10_price >= %s;
         """
 
         upsert_sql = """
@@ -286,10 +286,10 @@ class PriceChartingImporter:
             t.console_name,
             t.product_name,
             t.release_date,
-            t.manual_only_price as today_price,
+            t.psa_10_price as today_price,
             t.sales_volume,
-            d7.manual_only_price as price_7d,
-            d30.manual_only_price as price_30d
+            d7.psa_10_price as price_7d,
+            d30.psa_10_price as price_30d
         FROM pricecharting_raw t
         LEFT JOIN pricecharting_raw d7
             ON t.product_id = d7.product_id AND d7.import_date = %s
@@ -297,7 +297,7 @@ class PriceChartingImporter:
             ON t.product_id = d30.product_id AND d30.import_date = %s
         WHERE t.import_date = %s
           AND t.sales_volume >= %s
-          AND t.manual_only_price >= %s;
+          AND t.psa_10_price >= %s;
         """
 
         upsert_sql = """
