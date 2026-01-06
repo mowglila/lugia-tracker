@@ -301,17 +301,8 @@ class DatabaseManager:
         ALTER TABLE pricecharting_raw ADD COLUMN IF NOT EXISTS psa_10_price REAL;
         ALTER TABLE pricecharting_raw ADD COLUMN IF NOT EXISTS cgc_10_price REAL;
 
-        -- Migration: rename old columns to new names if they exist
-        -- manual_only_price -> psa_10_price (handled by ADD COLUMN IF NOT EXISTS above)
-        -- Copy data from old columns to new if needed
-        UPDATE pricecharting_raw SET psa_10_price = manual_only_price WHERE psa_10_price IS NULL AND manual_only_price IS NOT NULL;
-        UPDATE pricecharting_raw SET grade_9_price = graded_price WHERE grade_9_price IS NULL AND graded_price IS NOT NULL;
-        UPDATE pricecharting_raw SET grade_9_5_price = box_only_price WHERE grade_9_5_price IS NULL AND box_only_price IS NOT NULL;
-        UPDATE pricecharting_raw SET grade_8_price = new_price WHERE grade_8_price IS NULL AND new_price IS NOT NULL;
-        UPDATE pricecharting_raw SET grade_7_price = cib_price WHERE grade_7_price IS NULL AND cib_price IS NOT NULL;
-        UPDATE pricecharting_raw SET grade_1_price = psa_1_price WHERE grade_1_price IS NULL AND psa_1_price IS NOT NULL;
-        UPDATE pricecharting_raw SET grade_2_price = psa_2_price WHERE grade_2_price IS NULL AND psa_2_price IS NOT NULL;
-        UPDATE pricecharting_raw SET grade_3_price = psa_3_price WHERE grade_3_price IS NULL AND psa_3_price IS NOT NULL;
+        -- Legacy migration statements removed (Jan 2025)
+        -- Old column names (manual_only_price, graded_price, etc.) no longer exist
 
         -- Card market candidates (filtered: volume >= 50, PSA 10 price >= $50)
         CREATE TABLE IF NOT EXISTS card_market_candidates (
@@ -362,6 +353,8 @@ class DatabaseManager:
 
         try:
             with self.conn.cursor() as cursor:
+                # Use longer timeout for init (schema changes can be slow)
+                cursor.execute("SET LOCAL statement_timeout = '120000'")  # 2 minutes
                 cursor.execute(create_tables_sql)
                 self.conn.commit()
                 print("Database tables initialized")
