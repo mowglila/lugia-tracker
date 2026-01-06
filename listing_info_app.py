@@ -556,6 +556,17 @@ def get_pricecharting_info_cached(card_name, card_number=None, set_name=None,
     clean_num = clean_card_number(card_number) if card_number else None
     clean_set = set_name.replace('Pokemon ', '').replace('Pokémon ', '').strip().lower() if set_name else None
 
+    # Track best match at each priority level separately
+    # Higher priority matches override lower priority ones
+    priority1_match = None  # card_name + card_number + set_name
+    priority2_match = None  # card_name + card_number
+    priority3_match = None  # card_name + set_name
+    priority4_match = None  # card_name only (specific types)
+    p1_volume = -1
+    p2_volume = -1
+    p3_volume = -1
+    p4_volume = -1
+
     for record in pc_data:
         product_lower = record['product_name_lower']
         console_lower = record['console_name_lower']
@@ -564,45 +575,52 @@ def get_pricecharting_info_cached(card_name, card_number=None, set_name=None,
         if card_name_lower not in product_lower:
             continue
 
-        # Priority 1: Match on card_name + card_number + set_name
-        if clean_num and clean_set:
+        volume = record['sales_volume'] or 0
+
+        # Check card number match
+        num_match = False
+        if clean_num:
             num_match = f'#{clean_num}' in product_lower or f'#{clean_num} ' in product_lower
-            set_match = clean_set in console_lower
-            if num_match and set_match:
-                volume = record['sales_volume'] or 0
-                if volume > best_volume:
-                    matched_record = record
-                    best_volume = volume
-                continue
 
-        # Priority 2: Match on card_name + card_number
-        if clean_num and matched_record is None:
-            num_match = f'#{clean_num}' in product_lower or f'#{clean_num} ' in product_lower
-            if num_match:
-                volume = record['sales_volume'] or 0
-                if volume > best_volume:
-                    matched_record = record
-                    best_volume = volume
-                continue
+        # Check set name match (more flexible - any word from set_name)
+        set_match = False
+        if clean_set:
+            # Split set name into words and check if any significant word matches
+            set_words = [w for w in clean_set.split() if len(w) >= 4]
+            for word in set_words:
+                if word in console_lower:
+                    set_match = True
+                    break
 
-        # Priority 3: Match on card_name + set_name
-        if clean_set and matched_record is None:
-            if clean_set in console_lower:
-                volume = record['sales_volume'] or 0
-                if volume > best_volume:
-                    matched_record = record
-                    best_volume = volume
-                continue
+        # Priority 1: card_name + card_number + set_name (most specific)
+        if num_match and set_match:
+            if volume > p1_volume:
+                priority1_match = record
+                p1_volume = volume
 
-        # Priority 4: Fallback to card name only (only for specific card types)
-        if matched_record is None:
+        # Priority 2: card_name + card_number
+        elif num_match:
+            if volume > p2_volume:
+                priority2_match = record
+                p2_volume = volume
+
+        # Priority 3: card_name + set_name
+        elif set_match:
+            if volume > p3_volume:
+                priority3_match = record
+                p3_volume = volume
+
+        # Priority 4: card_name only (only for specific card types like VMAX, EX, etc.)
+        else:
             specific_terms = ['vmax', 'gx', 'ex', 'vstar', 'radiant',
                               'full art', 'illustration rare', 'gold', 'rainbow']
             if any(term in card_name_lower for term in specific_terms):
-                volume = record['sales_volume'] or 0
-                if volume > best_volume:
-                    matched_record = record
-                    best_volume = volume
+                if volume > p4_volume:
+                    priority4_match = record
+                    p4_volume = volume
+
+    # Return the highest priority match found
+    matched_record = priority1_match or priority2_match or priority3_match or priority4_match
 
     # Extract prices from matched record
     if matched_record:

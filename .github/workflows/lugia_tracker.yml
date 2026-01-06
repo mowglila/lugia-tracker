@@ -1,12 +1,16 @@
 name: Lugia Tracker - Automated Search
 
-on:
-  # Run every 6 hours
-  schedule:
-    - cron: '0 */6 * * *'  # At minute 0 past every 6th hour
+# DISABLED: Consolidating to card_discovery workflow to reduce eBay API calls
+# on:
+#   # Run every 6 hours
+#   schedule:
+#     - cron: '0 */6 * * *'  # At minute 0 past every 6th hour
+#
+#   # Allow manual triggering
+#   workflow_dispatch:
 
-  # Allow manual triggering
-  workflow_dispatch:
+on:
+  workflow_dispatch:  # Manual trigger only
 
 jobs:
   track-lugia:

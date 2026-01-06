@@ -26,8 +26,99 @@ class CardDiscoveryEngine:
     def __init__(self, db: DatabaseManager, ebay: EbayAPI):
         self.db = db
         self.ebay = ebay
+        self.candidate_keywords = None  # Cached keywords for filtering
 
-    def discover_listings(self, max_listings: int = 2000, price_filter: float = 50.0, incremental: bool = True) -> List[Dict]:
+    def _load_candidate_keywords(self) -> set:
+        """
+        Load card names from our candidate tables to use as filters.
+        This reduces getItem calls by only fetching details for listings
+        that match cards we're interested in.
+
+        Returns:
+            Set of lowercase keywords to match against listing titles
+        """
+        if self.candidate_keywords is not None:
+            return self.candidate_keywords
+
+        keywords = set()
+
+        try:
+            with self.db.conn.cursor() as cursor:
+                # Get card names from card_market_candidates (high-value cards)
+                cursor.execute("""
+                    SELECT DISTINCT card_name
+                    FROM card_market_candidates
+                    WHERE last_updated = (SELECT MAX(last_updated) FROM card_market_candidates)
+                      AND psa_10_price >= 100
+                """)
+                for row in cursor.fetchall():
+                    if row[0]:
+                        # Use full card name only (not individual words)
+                        # Individual words like "charizard" or "vmax" match too many listings
+                        # Skip very short names (e.g., "N", "Mew") - they match too broadly
+                        name = row[0].lower()
+                        if len(name) >= 5:  # Minimum 5 chars to avoid "N", "Mew", "Muk" etc.
+                            keywords.add(name)
+
+                # Get card names from big_movers (trending cards)
+                cursor.execute("""
+                    SELECT DISTINCT card_name
+                    FROM big_movers
+                    WHERE captured_date = (SELECT MAX(captured_date) FROM big_movers)
+                """)
+                for row in cursor.fetchall():
+                    if row[0]:
+                        name = row[0].lower()
+                        if len(name) >= 5:
+                            keywords.add(name)
+
+                # Get card names from wishlist_demand (high demand cards)
+                cursor.execute("""
+                    SELECT DISTINCT card_name
+                    FROM wishlist_demand
+                    WHERE captured_date = (SELECT MAX(captured_date) FROM wishlist_demand)
+                      AND wishlist_count >= 50
+                """)
+                for row in cursor.fetchall():
+                    if row[0]:
+                        name = row[0].lower()
+                        if len(name) >= 5:
+                            keywords.add(name)
+
+        except Exception as e:
+            print(f"  Warning: Could not load candidate keywords: {e}")
+
+        self.candidate_keywords = keywords
+        return keywords
+
+    def _matches_candidate(self, title: str) -> bool:
+        """
+        Check if a listing title matches any of our candidate cards.
+
+        Args:
+            title: eBay listing title
+
+        Returns:
+            True if the title contains a candidate keyword
+        """
+        if not title:
+            return False
+
+        keywords = self._load_candidate_keywords()
+        if not keywords:
+            # If no keywords loaded, allow all (fallback)
+            return True
+
+        title_lower = title.lower()
+
+        # Check if any keyword appears in the title
+        for keyword in keywords:
+            if keyword in title_lower:
+                return True
+
+        return False
+
+    def discover_listings(self, max_listings: int = 1000, price_filter: float = 50.0, incremental: bool = True) -> List[Dict]:
         """
         Search eBay for Pokemon cards and collect individual listing details.
 
@@ -75,8 +166,46 @@ class CardDiscoveryEngine:
             print("  No new listings to process")
             return []
 
-        # Extract individual listing details
-        individual_listings = self._extract_listing_details(listings)
+        # Pre-filter listings by title match BEFORE calling getItem API
+        # This significantly reduces API calls by only fetching details for candidate matches
+        print("  Loading candidate keywords for filtering...")
+        keywords = self._load_candidate_keywords()
+        print(f"  Loaded {len(keywords):,} keywords from candidate tables")
+
+        # Additional price filter for getItem calls (search returns >= $50, but we only
+        # call getItem for >= $100 to reduce API usage)
+        getitem_price_threshold = 100.0
+
+        candidate_listings = []
+        price_filtered = 0
+        keyword_filtered = 0
+        for listing in listings:
+            # Check price from search summary (available without getItem call)
+            price_data = listing.get('price', {})
+            if isinstance(price_data, dict):
+                listing_price = float(price_data.get('value', 0))
+            else:
+                listing_price = 0
+
+            if listing_price < getitem_price_threshold:
+                price_filtered += 1
+                continue
+
+            title = listing.get('title', '')
+            if self._matches_candidate(title):
+                candidate_listings.append(listing)
+            else:
+                keyword_filtered += 1
+
+        print(f"  Filtered: {price_filtered:,} below ${getitem_price_threshold}, {keyword_filtered:,} no keyword match")
+        print(f"  Pre-filtered to {len(candidate_listings):,} candidates for getItem calls")
+
+        if not candidate_listings:
+            print("  No candidate matches found")
+            return []
+
+        # Extract individual listing details (only for candidate matches)
+        individual_listings = self._extract_listing_details(candidate_listings)
 
         print(f"\nCollected {len(individual_listings)} individual listing details")
         return individual_listings
@@ -343,7 +472,7 @@ def main():
 
     try:
         # Get parameters from environment or use defaults
-        max_listings = int(os.getenv('MAX_LISTINGS', '3000'))
+        max_listings = int(os.getenv('MAX_LISTINGS', '1000'))
         price_filter = float(os.getenv('PRICE_FILTER', '50.0'))
         incremental = os.getenv('INCREMENTAL', 'true').lower() == 'true'
 
