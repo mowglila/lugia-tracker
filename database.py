@@ -354,8 +354,12 @@ class DatabaseManager:
         try:
             with self.conn.cursor() as cursor:
                 # Use longer timeout for init (schema changes can be slow)
-                cursor.execute("SET LOCAL statement_timeout = '120000'")  # 2 minutes
+                # Must use SET (not SET LOCAL) to override session-level timeout from connection options
+                cursor.execute("SET statement_timeout = '120000'")  # 2 minutes
                 cursor.execute(create_tables_sql)
+                self.conn.commit()
+                # Restore normal timeout for subsequent queries
+                cursor.execute("SET statement_timeout = '30000'")  # 30 seconds
                 self.conn.commit()
                 print("Database tables initialized")
         except Exception as e:
