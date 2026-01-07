@@ -73,6 +73,21 @@ class DatabaseManager:
 
     def init_database(self):
         """Create database tables if they don't exist."""
+        # Quick check if tables already exist - skip heavy init if so
+        try:
+            with self.conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT COUNT(*) FROM information_schema.tables
+                    WHERE table_schema = 'public'
+                    AND table_name IN ('listings', 'discovered_listings', 'pricecharting_raw')
+                """)
+                count = cursor.fetchone()[0]
+                if count >= 3:
+                    print("Database tables already exist, skipping init")
+                    return
+        except Exception:
+            pass  # Continue with full init if check fails
+
         create_tables_sql = """
         -- Listings table (current snapshot)
         CREATE TABLE IF NOT EXISTS listings (
