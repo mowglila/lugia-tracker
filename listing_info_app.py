@@ -173,25 +173,32 @@ def get_grade_matcher():
     """Get GradeMatcher with latest market values."""
     db = get_db_connection()
 
-    with db.conn.cursor() as cursor:
-        cursor.execute('''
-            SELECT
-                psa_10_price, psa_9_price, psa_8_price, psa_7_price,
-                bgs_10_price, cgc_10_price, cgc_9_5_price, cgc_9_price,
-                raw_ungraded_price
-            FROM market_values
-            ORDER BY recorded_at DESC
-            LIMIT 1
-        ''')
-        row = cursor.fetchone()
+    try:
+        # Rollback any failed transaction before querying
+        db.conn.rollback()
 
-        if row:
-            market_values = {
-                'psa_10_price': row[0], 'psa_9_price': row[1], 'psa_8_price': row[2],
-                'psa_7_price': row[3], 'bgs_10_price': row[4], 'cgc_10_price': row[5],
-                'cgc_9_5_price': row[6], 'cgc_9_price': row[7], 'raw_ungraded_price': row[8],
-            }
-            return GradeMatcher(market_values)
+        with db.conn.cursor() as cursor:
+            cursor.execute('''
+                SELECT
+                    psa_10_price, psa_9_price, psa_8_price, psa_7_price,
+                    bgs_10_price, cgc_10_price, cgc_9_5_price, cgc_9_price,
+                    raw_ungraded_price
+                FROM market_values
+                ORDER BY recorded_at DESC
+                LIMIT 1
+            ''')
+            row = cursor.fetchone()
+
+            if row:
+                market_values = {
+                    'psa_10_price': row[0], 'psa_9_price': row[1], 'psa_8_price': row[2],
+                    'psa_7_price': row[3], 'bgs_10_price': row[4], 'cgc_10_price': row[5],
+                    'cgc_9_5_price': row[6], 'cgc_9_price': row[7], 'raw_ungraded_price': row[8],
+                }
+                return GradeMatcher(market_values)
+    except Exception as e:
+        db.conn.rollback()
+        st.warning(f"Could not load grade matcher: {e}")
 
     return None
 
