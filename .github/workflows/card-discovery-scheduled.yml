@@ -2,12 +2,25 @@ name: Scheduled Card Discovery
 
 on:
   schedule:
-    # Run every hour (24 times per day)
-    # With 200 max listings, ~140 getItem calls/run = ~3,400 calls/day (under 5,000 limit)
+    # Regular discovery: every hour (24 times per day)
+    # ~200 listings × 24 = ~3,400 calls/day
     - cron: '0 * * * *'
+    # Auction discovery: once daily at 8 AM UTC
+    # ~300 listings × 1 = ~300 calls/day
+    # Total: ~3,700 calls/day (under 5,000 limit)
+    - cron: '0 8 * * *'
 
   # Allow manual triggering
   workflow_dispatch:
+    inputs:
+      auction_mode:
+        description: 'Run auction discovery'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 jobs:
   discover-cards:
@@ -28,7 +41,21 @@ jobs:
         python -m pip install --upgrade pip
         pip install psycopg2-binary python-dotenv requests
 
-    - name: Run card discovery (incremental)
+    - name: Determine run mode
+      id: mode
+      run: |
+        # Check if this is the 8 AM auction schedule or manual auction trigger
+        if [ "${{ github.event.schedule }}" == "0 8 * * *" ] || [ "${{ github.event.inputs.auction_mode }}" == "true" ]; then
+          echo "auction_mode=true" >> $GITHUB_OUTPUT
+          echo "max_listings=300" >> $GITHUB_OUTPUT
+          echo "price_filter=50.0" >> $GITHUB_OUTPUT
+        else
+          echo "auction_mode=false" >> $GITHUB_OUTPUT
+          echo "max_listings=200" >> $GITHUB_OUTPUT
+          echo "price_filter=50.0" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Run card discovery
       env:
         EBAY_APP_ID: ${{ secrets.EBAY_APP_ID }}
         EBAY_CERT_ID: ${{ secrets.EBAY_CERT_ID }}
@@ -36,6 +63,9 @@ jobs:
         PRICECHARTING_API_KEY: ${{ secrets.PRICECHARTING_API_KEY }}
         PYTHONUNBUFFERED: 1
         INCREMENTAL: 'true'
+        AUCTION_MODE: ${{ steps.mode.outputs.auction_mode }}
+        MAX_LISTINGS: ${{ steps.mode.outputs.max_listings }}
+        AUCTION_PRICE_FILTER: ${{ steps.mode.outputs.price_filter }}
       run: python card_discovery.py
 
     - name: Upload logs (on failure)

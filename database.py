@@ -242,11 +242,15 @@ class DatabaseManager:
             image_url TEXT,
             listing_type TEXT,
             is_auction BOOLEAN DEFAULT FALSE,
+            auction_end_time TIMESTAMP,
             is_multi_variation BOOLEAN DEFAULT FALSE,
             discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             is_active BOOLEAN DEFAULT TRUE
         );
+
+        -- Add auction_end_time column if it doesn't exist
+        ALTER TABLE discovered_listings ADD COLUMN IF NOT EXISTS auction_end_time TIMESTAMP;
 
         -- Add is_multi_variation column if it doesn't exist
         ALTER TABLE discovered_listings ADD COLUMN IF NOT EXISTS is_multi_variation BOOLEAN DEFAULT FALSE;
@@ -618,13 +622,14 @@ class DatabaseManager:
             item_id, title, card_name, set_name, card_number,
             variant_attributes, grade, grading_company, price, condition,
             seller_username, seller_feedback, url, image_url, listing_type, is_auction,
-            is_multi_variation
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            auction_end_time, is_multi_variation
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (item_id) DO UPDATE SET
             title = EXCLUDED.title,
             price = EXCLUDED.price,
             condition = EXCLUDED.condition,
             seller_feedback = EXCLUDED.seller_feedback,
+            auction_end_time = EXCLUDED.auction_end_time,
             is_multi_variation = EXCLUDED.is_multi_variation,
             last_seen = CURRENT_TIMESTAMP,
             is_active = TRUE
@@ -653,6 +658,7 @@ class DatabaseManager:
                     listing.get('image_url'),
                     listing.get('listing_type'),
                     listing.get('is_auction', False),
+                    listing.get('auction_end_time'),
                     listing.get('is_multi_variation', False)
                 ))
                 self.conn.commit()
@@ -680,9 +686,9 @@ class DatabaseManager:
             item_id, title, card_name, set_name, card_number,
             variant_attributes, grade, grading_company, price,
             condition, seller_username, seller_feedback,
-            url, image_url, listing_type, is_auction, is_multi_variation
+            url, image_url, listing_type, is_auction, auction_end_time, is_multi_variation
         ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
         )
         ON CONFLICT (item_id) DO UPDATE SET
             title = EXCLUDED.title,
@@ -700,6 +706,7 @@ class DatabaseManager:
             image_url = EXCLUDED.image_url,
             listing_type = EXCLUDED.listing_type,
             is_auction = EXCLUDED.is_auction,
+            auction_end_time = EXCLUDED.auction_end_time,
             is_multi_variation = EXCLUDED.is_multi_variation,
             last_seen = CURRENT_TIMESTAMP,
             is_active = TRUE;
@@ -740,6 +747,7 @@ class DatabaseManager:
                         listing.get('image_url'),
                         listing.get('listing_type'),
                         listing.get('is_auction', False),
+                        listing.get('auction_end_time'),
                         listing.get('is_multi_variation', False)
                     ))
 

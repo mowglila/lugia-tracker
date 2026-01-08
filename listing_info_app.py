@@ -530,6 +530,65 @@ def load_vintage_listings(_db):
     return pd.DataFrame()
 
 
+@st.cache_data(ttl=60)  # Cache for 1 minute
+def load_auction_listings(_db):
+    """
+    Load eBay auction listings ending within 24 hours.
+    Filters for auctions with current bid >= $100.
+    """
+    query = """
+    SELECT
+        d.item_id,
+        d.card_name,
+        d.set_name,
+        d.card_number,
+        d.grade,
+        d.grading_company,
+        d.price as listing_price,
+        d.price,
+        0 as shipping,
+        d.condition,
+        COALESCE((d.variant_attributes->>'is_graded')::boolean, false) as is_graded,
+        d.variant_attributes->>'condition' as raw_condition,
+        d.url,
+        d.image_url,
+        d.variant_attributes,
+        d.seller_feedback,
+        d.discovered_at,
+        d.auction_end_time,
+        'auction' as interest
+    FROM discovered_listings d
+    WHERE d.is_active = true
+      AND d.is_auction = true
+      AND d.auction_end_time IS NOT NULL
+      AND d.auction_end_time > NOW()
+      AND d.auction_end_time <= NOW() + INTERVAL '24 hours'
+      AND d.card_name IS NOT NULL
+      AND d.card_name != ''
+      AND d.price >= 100
+      AND (d.is_multi_variation = FALSE OR d.is_multi_variation IS NULL)
+      AND SPLIT_PART(d.item_id, '|', 3) = '0'
+      AND d.title NOT ILIKE '%%Choose Your Card%%'
+      AND d.title NOT ILIKE '%%Choose Your%%'
+      AND d.title NOT ILIKE '%%Pick Your Card%%'
+      AND d.title NOT ILIKE '%%Pick Your%%'
+      AND d.title NOT ILIKE '%%You Choose%%'
+      AND d.title NOT ILIKE '%%U Pick%%'
+      AND d.title NOT ILIKE '%%You Pick%%'
+    ORDER BY d.auction_end_time ASC
+    """
+    try:
+        with _db.conn.cursor() as cursor:
+            cursor.execute(query)
+            columns = [desc[0] for desc in cursor.description]
+            data = cursor.fetchall()
+        if data:
+            return pd.DataFrame(data, columns=columns)
+    except Exception as e:
+        st.error(f"Error loading Auction listings: {e}")
+    return pd.DataFrame()
+
+
 def extract_pokemon_name(title):
     """
     Extract Pokemon name from eBay listing title.
@@ -1176,7 +1235,7 @@ def main():
     st.sidebar.title("Filters")
 
     # Interest filter
-    interest_options = ["Lugia", "Demand", "Mover", "High-End", "Vintage"]
+    interest_options = ["Lugia", "Demand", "Mover", "High-End", "Vintage", "Auctions"]
     interest_filter = st.sidebar.multiselect(
         "Interest",
         options=interest_options,
@@ -1210,6 +1269,11 @@ def main():
         vintage_df = load_vintage_listings(db)
         if not vintage_df.empty:
             all_listings = pd.concat([all_listings, vintage_df], ignore_index=True)
+
+    if "Auctions" in interest_filter:
+        auction_df = load_auction_listings(db)
+        if not auction_df.empty:
+            all_listings = pd.concat([all_listings, auction_df], ignore_index=True)
 
     # Filter out hidden listings
     hidden = get_hidden_listings()

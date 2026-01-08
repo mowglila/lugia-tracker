@@ -118,7 +118,8 @@ class CardDiscoveryEngine:
 
         return False
 
-    def discover_listings(self, max_listings: int = 200, price_filter: float = 50.0, incremental: bool = True) -> List[Dict]:
+    def discover_listings(self, max_listings: int = 200, price_filter: float = 50.0,
+                          incremental: bool = True, auction_only: bool = False) -> List[Dict]:
         """
         Search eBay for Pokemon cards and collect individual listing details.
 
@@ -126,12 +127,14 @@ class CardDiscoveryEngine:
             max_listings: Maximum listings to fetch from eBay
             price_filter: Only fetch listings >= this price
             incremental: If True, skip listings already in database (saves API calls)
+            auction_only: If True, only search for auction listings
 
         Returns:
             List of individual listing dictionaries
         """
+        mode_str = "Auctions" if auction_only else "Individual Listings"
         print(f"\n{'='*60}")
-        print("Card Discovery - Individual Listings")
+        print(f"Card Discovery - {mode_str}")
         print(f"{'='*60}\n")
 
         # Get existing item_ids if incremental mode
@@ -142,11 +145,13 @@ class CardDiscoveryEngine:
             print(f"  Found {len(existing_ids):,} existing listings in database")
 
         # Fetch listings from Pokemon TCG category with price filter
-        print(f"Searching Pokemon TCG category for listings >= ${price_filter}...")
+        search_type = "auctions" if auction_only else "listings"
+        print(f"Searching Pokemon TCG category for {search_type} >= ${price_filter}...")
         listings = self.ebay.search_by_category(
             min_price=price_filter,
             max_results=max_listings,
-            query="Pokemon"
+            query="Pokemon",
+            auction_only=auction_only
         )
 
         if not listings:
@@ -258,6 +263,17 @@ class CardDiscoveryEngine:
                     item_group_type == 'SELLER_DEFINED_VARIATIONS' or
                     item_group_href is not None
                 )
+                # Parse auction end time if available
+                auction_end_time = None
+                item_end_date = details.get('itemEndDate')
+                if item_end_date:
+                    try:
+                        # eBay returns ISO format: 2024-01-15T10:30:00.000Z
+                        from datetime import datetime
+                        auction_end_time = datetime.fromisoformat(item_end_date.replace('Z', '+00:00'))
+                    except (ValueError, TypeError):
+                        pass
+
                 individual_listings.append({
                     'item_id': item_id,
                     'title': details.get('title', ''),
@@ -275,6 +291,7 @@ class CardDiscoveryEngine:
                     'image_url': details.get('image', {}).get('imageUrl'),
                     'listing_type': 'AUCTION' if details.get('currentBidPrice') else 'FIXED_PRICE',
                     'is_auction': bool(details.get('currentBidPrice')),
+                    'auction_end_time': auction_end_time,
                     'is_multi_variation': is_multi_variation
                 })
 
@@ -475,17 +492,24 @@ def main():
         max_listings = int(os.getenv('MAX_LISTINGS', '200'))
         price_filter = float(os.getenv('PRICE_FILTER', '50.0'))
         incremental = os.getenv('INCREMENTAL', 'true').lower() == 'true'
+        auction_mode = os.getenv('AUCTION_MODE', 'false').lower() == 'true'
+
+        # For auction mode, use lower price threshold (current bid can be low)
+        if auction_mode:
+            price_filter = float(os.getenv('AUCTION_PRICE_FILTER', '50.0'))
 
         print(f"Discovery parameters:")
         print(f"  Max Listings to Fetch: {max_listings}")
         print(f"  Price Filter: ${price_filter}")
-        print(f"  Incremental Mode: {incremental}\n")
+        print(f"  Incremental Mode: {incremental}")
+        print(f"  Auction Mode: {auction_mode}\n")
 
         # Discover individual listings
         individual_listings = discovery.discover_listings(
             max_listings=max_listings,
             price_filter=price_filter,
-            incremental=incremental
+            incremental=incremental,
+            auction_only=auction_mode
         )
 
         # Save individual listings to database

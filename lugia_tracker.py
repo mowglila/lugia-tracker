@@ -190,7 +190,8 @@ class EbayAPI:
         return all_items[:max_results]
 
     def search_by_category(self, category_id: str = None, min_price: float = 50.0,
-                           max_results: int = 2000, query: str = "Pokemon") -> List[Dict]:
+                           max_results: int = 2000, query: str = "Pokemon",
+                           auction_only: bool = False) -> List[Dict]:
         """
         Search listings by category with price filter.
 
@@ -202,6 +203,7 @@ class EbayAPI:
             min_price: Minimum price filter in USD
             max_results: Maximum total results to fetch
             query: Optional keyword to narrow results (default: "Pokemon")
+            auction_only: If True, only return auction listings (default: False)
 
         Returns:
             List of item summaries >= min_price
@@ -224,6 +226,8 @@ class EbayAPI:
 
         # Build price filter for eBay API
         price_filter = f"price:[{min_price}..],priceCurrency:USD"
+        if auction_only:
+            price_filter += ",buyingOptions:{AUCTION}"
 
         while offset < max_results:
             params = {
