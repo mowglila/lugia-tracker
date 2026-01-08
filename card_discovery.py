@@ -118,7 +118,7 @@ class CardDiscoveryEngine:
 
         return False
 
-    def discover_listings(self, max_listings: int = 1000, price_filter: float = 50.0, incremental: bool = True) -> List[Dict]:
+    def discover_listings(self, max_listings: int = 200, price_filter: float = 50.0, incremental: bool = True) -> List[Dict]:
         """
         Search eBay for Pokemon cards and collect individual listing details.
 
@@ -472,7 +472,7 @@ def main():
 
     try:
         # Get parameters from environment or use defaults
-        max_listings = int(os.getenv('MAX_LISTINGS', '1000'))
+        max_listings = int(os.getenv('MAX_LISTINGS', '200'))
         price_filter = float(os.getenv('PRICE_FILTER', '50.0'))
         incremental = os.getenv('INCREMENTAL', 'true').lower() == 'true'
 

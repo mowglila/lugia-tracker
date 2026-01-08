@@ -299,7 +299,7 @@ def load_big_mover_listings(_db):
       AND d.seller_feedback >= 50
       AND (d.is_multi_variation = FALSE OR d.is_multi_variation IS NULL)
       AND SPLIT_PART(d.item_id, '|', 3) = '0'
-      AND d.discovered_at >= CURRENT_DATE - INTERVAL '3 days'
+      AND d.discovered_at >= CURRENT_DATE - INTERVAL '2 days'
       AND d.title NOT ILIKE '%%Choose Your Card%%'
       AND d.title NOT ILIKE '%%Choose Your%%'
       AND d.title NOT ILIKE '%%Pick Your Card%%'
@@ -363,7 +363,7 @@ def load_wishlist_listings(_db):
       AND d.seller_feedback >= 50
       AND (d.is_multi_variation = FALSE OR d.is_multi_variation IS NULL)
       AND SPLIT_PART(d.item_id, '|', 3) = '0'
-      AND d.discovered_at >= CURRENT_DATE - INTERVAL '3 days'
+      AND d.discovered_at >= CURRENT_DATE - INTERVAL '2 days'
       AND d.title NOT ILIKE '%%Choose Your Card%%'
       AND d.title NOT ILIKE '%%Choose Your%%'
       AND d.title NOT ILIKE '%%Pick Your Card%%'
@@ -429,7 +429,7 @@ def load_highend_listings(_db):
       AND d.price >= 300
       AND (d.is_multi_variation = FALSE OR d.is_multi_variation IS NULL)
       AND SPLIT_PART(d.item_id, '|', 3) = '0'
-      AND d.discovered_at >= CURRENT_DATE - INTERVAL '3 days'
+      AND d.discovered_at >= CURRENT_DATE - INTERVAL '2 days'
       AND d.title NOT ILIKE '%%Choose Your Card%%'
       AND d.title NOT ILIKE '%%Choose Your%%'
       AND d.title NOT ILIKE '%%Pick Your Card%%'
@@ -448,6 +448,85 @@ def load_highend_listings(_db):
             return pd.DataFrame(data, columns=columns)
     except Exception as e:
         st.error(f"Error loading High-End listings: {e}")
+    return pd.DataFrame()
+
+
+@st.cache_data(ttl=60)  # Cache for 1 minute
+def load_vintage_listings(_db):
+    """
+    Load eBay listings for vintage cards (pre-2005, 1st edition).
+    Filters for cards with price >= $150 and "1st edition" in title.
+    """
+    query = """
+    SELECT
+        d.item_id,
+        d.card_name,
+        d.set_name,
+        d.card_number,
+        d.grade,
+        d.grading_company,
+        d.price as listing_price,
+        d.price,
+        0 as shipping,
+        d.condition,
+        COALESCE((d.variant_attributes->>'is_graded')::boolean, false) as is_graded,
+        d.variant_attributes->>'condition' as raw_condition,
+        d.url,
+        d.image_url,
+        d.variant_attributes,
+        d.seller_feedback,
+        d.discovered_at,
+        'vintage' as interest
+    FROM discovered_listings d
+    WHERE d.is_active = true
+      AND d.card_name IS NOT NULL
+      AND d.card_name != ''
+      AND d.seller_feedback >= 50
+      AND d.price >= 150
+      AND (d.is_multi_variation = FALSE OR d.is_multi_variation IS NULL)
+      AND SPLIT_PART(d.item_id, '|', 3) = '0'
+      AND d.discovered_at >= CURRENT_DATE - INTERVAL '2 days'
+      AND (d.title ILIKE '%%1st edition%%' OR d.title ILIKE '%%1st ed%%')
+      AND (
+          d.set_name ILIKE '%%base%%'
+          OR d.set_name ILIKE '%%jungle%%'
+          OR d.set_name ILIKE '%%fossil%%'
+          OR d.set_name ILIKE '%%team rocket%%'
+          OR d.set_name ILIKE '%%gym%%'
+          OR d.set_name ILIKE '%%neo%%'
+          OR d.set_name ILIKE '%%legendary%%'
+          OR d.set_name ILIKE '%%expedition%%'
+          OR d.set_name ILIKE '%%aquapolis%%'
+          OR d.set_name ILIKE '%%skyridge%%'
+          OR d.title ILIKE '%%base set%%'
+          OR d.title ILIKE '%%jungle%%'
+          OR d.title ILIKE '%%fossil%%'
+          OR d.title ILIKE '%%team rocket%%'
+          OR d.title ILIKE '%%gym heroes%%'
+          OR d.title ILIKE '%%gym challenge%%'
+          OR d.title ILIKE '%%neo genesis%%'
+          OR d.title ILIKE '%%neo discovery%%'
+          OR d.title ILIKE '%%neo revelation%%'
+          OR d.title ILIKE '%%neo destiny%%'
+      )
+      AND d.title NOT ILIKE '%%Choose Your Card%%'
+      AND d.title NOT ILIKE '%%Choose Your%%'
+      AND d.title NOT ILIKE '%%Pick Your Card%%'
+      AND d.title NOT ILIKE '%%Pick Your%%'
+      AND d.title NOT ILIKE '%%You Choose%%'
+      AND d.title NOT ILIKE '%%U Pick%%'
+      AND d.title NOT ILIKE '%%You Pick%%'
+    ORDER BY d.price DESC
+    """
+    try:
+        with _db.conn.cursor() as cursor:
+            cursor.execute(query)
+            columns = [desc[0] for desc in cursor.description]
+            data = cursor.fetchall()
+        if data:
+            return pd.DataFrame(data, columns=columns)
+    except Exception as e:
+        st.error(f"Error loading Vintage listings: {e}")
     return pd.DataFrame()
 
 
@@ -611,7 +690,8 @@ def get_pricecharting_info_cached(card_name, card_number=None, set_name=None,
                 p3_volume = volume
 
         # Priority 4: card_name only (only for specific card types like VMAX, EX, etc.)
-        else:
+        # ONLY use this fallback if we don't have a card number to match against
+        elif not clean_num:
             specific_terms = ['vmax', 'gx', 'ex', 'vstar', 'radiant',
                               'full art', 'illustration rare', 'gold', 'rainbow']
             if any(term in card_name_lower for term in specific_terms):
@@ -1096,7 +1176,7 @@ def main():
     st.sidebar.title("Filters")
 
     # Interest filter
-    interest_options = ["Lugia", "Demand", "Mover", "High-End"]
+    interest_options = ["Lugia", "Demand", "Mover", "High-End", "Vintage"]
     interest_filter = st.sidebar.multiselect(
         "Interest",
         options=interest_options,
@@ -1125,6 +1205,11 @@ def main():
         highend_df = load_highend_listings(db)
         if not highend_df.empty:
             all_listings = pd.concat([all_listings, highend_df], ignore_index=True)
+
+    if "Vintage" in interest_filter:
+        vintage_df = load_vintage_listings(db)
+        if not vintage_df.empty:
+            all_listings = pd.concat([all_listings, vintage_df], ignore_index=True)
 
     # Filter out hidden listings
     hidden = get_hidden_listings()

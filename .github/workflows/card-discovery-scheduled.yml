@@ -2,9 +2,9 @@ name: Scheduled Card Discovery
 
 on:
   schedule:
-    # Run every 4 hours (6 times per day)
-    # Times: 00:00, 04:00, 08:00, 12:00, 16:00, 20:00 UTC
-    - cron: '0 */4 * * *'
+    # Run every hour (24 times per day)
+    # With 200 max listings, ~140 getItem calls/run = ~3,400 calls/day (under 5,000 limit)
+    - cron: '0 * * * *'
 
   # Allow manual triggering
   workflow_dispatch:
