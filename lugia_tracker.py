@@ -230,12 +230,16 @@ class EbayAPI:
             price_filter += ",buyingOptions:{AUCTION}"
 
         while offset < max_results:
+            # For auctions, sort by ending soonest to catch ones about to end
+            # For regular discovery, sort by newest for fresh listings
+            sort_order = 'endingSoonest' if auction_only else 'newlyListed'
+
             params = {
                 'category_ids': category_id,
                 'filter': price_filter,
                 'limit': per_page,
                 'offset': offset,
-                'sort': 'newlyListed'  # Sort by newest listings for better price distribution
+                'sort': sort_order
             }
 
             # Add query if provided

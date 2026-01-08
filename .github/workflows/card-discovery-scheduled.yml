@@ -6,8 +6,10 @@ on:
     # ~200 listings × 24 = ~3,400 calls/day
     - cron: '0 * * * *'
     # Auction discovery: once daily at 8 AM UTC
-    # ~300 listings × 1 = ~300 calls/day
-    # Total: ~3,700 calls/day (under 5,000 limit)
+    # Searches 1000 auctions sorted by endingSoonest, filters to 1-24h window
+    # before getItem calls - actual API usage depends on filter results
+    # Estimated ~100-200 getItem calls/day
+    # Total: ~3,500-3,600 calls/day (under 5,000 limit)
     - cron: '0 8 * * *'
 
   # Allow manual triggering
@@ -47,7 +49,9 @@ jobs:
         # Check if this is the 8 AM auction schedule or manual auction trigger
         if [ "${{ github.event.schedule }}" == "0 8 * * *" ] || [ "${{ github.event.inputs.auction_mode }}" == "true" ]; then
           echo "auction_mode=true" >> $GITHUB_OUTPUT
-          echo "max_listings=300" >> $GITHUB_OUTPUT
+          # Search 1000 auctions sorted by endingSoonest, then filter by end time
+          # before calling getItem API (1-24 hour window)
+          echo "max_listings=1000" >> $GITHUB_OUTPUT
           echo "price_filter=50.0" >> $GITHUB_OUTPUT
         else
           echo "auction_mode=false" >> $GITHUB_OUTPUT

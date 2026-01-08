@@ -7,6 +7,7 @@ No aggregate statistics computed (eBay API compliant).
 
 import os
 import time
+from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional
 from dotenv import load_dotenv
 from database import DatabaseManager
@@ -118,6 +119,53 @@ class CardDiscoveryEngine:
 
         return False
 
+    def _filter_auctions_by_end_time(self, listings: List[Dict],
+                                      min_hours: float = 1.0,
+                                      max_hours: float = 24.0) -> List[Dict]:
+        """
+        Filter auctions to only include those ending within the specified time window.
+        This is done BEFORE getItem calls to save API usage.
+
+        Args:
+            listings: List of eBay search result listings
+            min_hours: Minimum hours until auction end (default 1 hour)
+            max_hours: Maximum hours until auction end (default 24 hours)
+
+        Returns:
+            Filtered list of listings ending within the time window
+        """
+        now = datetime.now(timezone.utc)
+        min_end_time = now + timedelta(hours=min_hours)
+        max_end_time = now + timedelta(hours=max_hours)
+
+        filtered = []
+        too_soon = 0
+        too_late = 0
+        no_end_time = 0
+
+        for listing in listings:
+            # Get itemEndDate from search results (available before getItem call)
+            item_end_date = listing.get('itemEndDate')
+            if not item_end_date:
+                no_end_time += 1
+                continue
+
+            try:
+                # Parse ISO format: 2024-01-15T10:30:00.000Z
+                end_time = datetime.fromisoformat(item_end_date.replace('Z', '+00:00'))
+
+                if end_time < min_end_time:
+                    too_soon += 1
+                elif end_time > max_end_time:
+                    too_late += 1
+                else:
+                    filtered.append(listing)
+            except (ValueError, TypeError):
+                no_end_time += 1
+
+        print(f"  End time filter: {too_soon} ending <{min_hours}h, {too_late} ending >{max_hours}h, {no_end_time} no end time")
+        return filtered
+
     def discover_listings(self, max_listings: int = 200, price_filter: float = 50.0,
                           incremental: bool = True, auction_only: bool = False) -> List[Dict]:
         """
@@ -170,6 +218,17 @@ class CardDiscoveryEngine:
         if not listings:
             print("  No new listings to process")
             return []
+
+        # For auction mode, filter by end time BEFORE getItem calls
+        # Only keep auctions ending within 1-24 hours to focus on actionable opportunities
+        if auction_only:
+            print("  Filtering auctions by end time (1-24 hours)...")
+            listings = self._filter_auctions_by_end_time(listings, min_hours=1.0, max_hours=24.0)
+            print(f"  {len(listings):,} auctions ending within 1-24 hours")
+
+            if not listings:
+                print("  No auctions ending within the target window")
+                return []
 
         # Pre-filter listings by title match BEFORE calling getItem API
         # This significantly reduces API calls by only fetching details for candidate matches
