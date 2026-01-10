@@ -703,10 +703,12 @@ def get_pricecharting_info_cached(card_name, card_number=None, set_name=None,
 
     # Track best match at each priority level separately
     # Higher priority matches override lower priority ones
+    priority0_match = None  # card_number + set_name (most precise, no name check)
     priority1_match = None  # card_name + card_number + set_name
     priority2_match = None  # card_name + card_number
     priority3_match = None  # card_name + set_name
     priority4_match = None  # card_name only (specific types)
+    p0_volume = -1
     p1_volume = -1
     p2_volume = -1
     p3_volume = -1
@@ -715,10 +717,6 @@ def get_pricecharting_info_cached(card_name, card_number=None, set_name=None,
     for record in pc_data:
         product_lower = record['product_name_lower']
         console_lower = record['console_name_lower']
-
-        # Check if card name matches
-        if card_name_lower not in product_lower:
-            continue
 
         volume = record['sales_volume'] or 0
 
@@ -736,6 +734,19 @@ def get_pricecharting_info_cached(card_name, card_number=None, set_name=None,
                 if word in console_lower:
                     set_match = True
                     break
+
+        # Priority 0: card_number + set_name (highest priority - trust the structured data)
+        # This catches cases where eBay card name differs from PriceCharting name
+        # (e.g., "Groudon Ex" vs "Team Magma's Groudon")
+        if clean_num and num_match and set_match:
+            if volume > p0_volume:
+                priority0_match = record
+                p0_volume = volume
+            continue  # Skip name check for this record
+
+        # Check if card name matches (for remaining priorities)
+        if card_name_lower not in product_lower:
+            continue
 
         # Priority 1: card_name + card_number + set_name (most specific)
         if num_match and set_match:
@@ -766,7 +777,7 @@ def get_pricecharting_info_cached(card_name, card_number=None, set_name=None,
                     p4_volume = volume
 
     # Return the highest priority match found
-    matched_record = priority1_match or priority2_match or priority3_match or priority4_match
+    matched_record = priority0_match or priority1_match or priority2_match or priority3_match or priority4_match
 
     # Extract prices from matched record
     if matched_record:
