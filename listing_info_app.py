@@ -1423,12 +1423,21 @@ def main():
         all_listings['market_value'] = calc_results['market_value']
         all_listings['percent_delta'] = calc_results['percent_delta']
 
-        # Filter by value_diff percentage (data quality filter)
-        # Only include listings where listing price is 25-50% below market value
-        # This filters out likely incorrect matches or mislabeled items
+        # Data quality filters based on percent_delta
+        # Regular listings: 25-50% (filters out likely mismatches)
+        # Auctions: >= 15% (data quality filter)
         all_listings = all_listings[
-            (all_listings['percent_delta'] >= 25) &
-            (all_listings['percent_delta'] <= 50)
+            (
+                # Regular discovery listings
+                (all_listings['interest'] != 'auction') &
+                (all_listings['percent_delta'] >= 25) &
+                (all_listings['percent_delta'] <= 50)
+            ) |
+            (
+                # Auctions
+                (all_listings['interest'] == 'auction') &
+                (all_listings['percent_delta'] >= 15)
+            )
         ]
 
         # Sort by value_diff descending (best deals first) - default sort
