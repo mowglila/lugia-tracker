@@ -729,7 +729,9 @@ def get_pricecharting_info_cached(card_name, card_number=None, set_name=None,
         set_match = False
         if clean_set:
             # Split set name into words and check if any significant word matches
-            set_words = [w for w in clean_set.split() if len(w) >= 4]
+            # Exclude common words that appear in most set names
+            common_words = {'pokemon', 'card', 'cards', 'tcg', '2025', '2024', '2023'}
+            set_words = [w for w in clean_set.split() if len(w) >= 4 and w not in common_words]
             for word in set_words:
                 if word in console_lower:
                     set_match = True
