@@ -1255,20 +1255,15 @@ def main():
     st.sidebar.title("Filters")
 
     # Interest filter
-    interest_options = ["Lugia", "Demand", "Mover", "High-End", "Vintage", "Auctions"]
+    interest_options = ["Demand", "Mover", "High-End", "Vintage", "Auctions"]
     interest_filter = st.sidebar.multiselect(
         "Interest",
         options=interest_options,
-        default=["High-End"]
+        default=interest_options  # All selected by default
     )
 
     # Load data based on interest selection
     all_listings = pd.DataFrame()
-
-    if "Lugia" in interest_filter:
-        lugia_df = load_lugia_listings(db)
-        if not lugia_df.empty:
-            all_listings = pd.concat([all_listings, lugia_df], ignore_index=True)
 
     if "Mover" in interest_filter:
         big_mover_df = load_big_mover_listings(db)
@@ -1453,8 +1448,9 @@ def main():
             )
         ]
 
-        # Sort by value_diff descending (best deals first) - default sort
-        all_listings = all_listings.sort_values('value_diff', ascending=False)
+        # Sort by discovered_at descending (newest first) - default sort
+        if 'discovered_at' in all_listings.columns:
+            all_listings = all_listings.sort_values('discovered_at', ascending=False, na_position='last')
 
     # Additional filters (only show if we have data)
     if not all_listings.empty:
@@ -1502,23 +1498,24 @@ def main():
                         (all_listings[price_col] <= price_range[1])
                     ]
 
-        # Sort options (default sort by value_diff is already applied internally)
+        # Sort options (default sort by newest is already applied)
         st.sidebar.markdown("---")
-        sort_options = ["Newest First", "Price: Low to High", "Price: High to Low"]
+        sort_options = ["Newest First", "Best Value", "Price: Low to High", "Price: High to Low"]
         sort_by = st.sidebar.selectbox(
             "Sort By",
             options=sort_options,
-            index=None,
-            placeholder="Select sort order"
+            index=0  # Newest First as default
         )
         if sort_by == "Newest First":
             if 'discovered_at' in all_listings.columns:
                 all_listings = all_listings.sort_values('discovered_at', ascending=False, na_position='last')
+        elif sort_by == "Best Value":
+            if 'value_diff' in all_listings.columns:
+                all_listings = all_listings.sort_values('value_diff', ascending=False)
         elif sort_by == "Price: Low to High":
             all_listings = all_listings.sort_values(price_col, ascending=True)
         elif sort_by == "Price: High to Low":
             all_listings = all_listings.sort_values(price_col, ascending=False)
-        # When no option selected, keeps default sort by value_diff from line 1076
 
     # Sidebar - Stats
     st.sidebar.markdown("---")
